@@ -1,9 +1,31 @@
 using UnPack
 
 #=
-Use the JuMP tutorials to solve deterministic model using dynamic recursion
+Use dynamic recursion to solve deterministic problem
 =#
 
+""" Define model
+
+    # Fields
+    - `T`: quantity of observed trading periods
+    - `t`: list of trading period indices
+    - `d`: demand for each trading period (MWh)
+    - `B`: qunatity of generation price bands/tranches
+    - `mc`: generation costs per price band/tranche (\$/MWh)
+    - `bmax`: generation capacity per price band/tranche (MWh)
+    - `Qmax`: maximum generation capcity (MWh)
+    - `rho`: generator ramp-up constraint (MWh/h)
+    - `E`: maximum storage capacity (MWh)
+    - `η`: battery round-trip losses (dimensionless)
+    - `r`: battery discharge constraint (MWh/h)
+    - `s`: battery charge constraint (MWh/h)
+    - `L`: Value of Lost Loas (\$/MWh)
+    - `Q0`: initial generation
+    - `y0`: initial storage
+
+    # Constructors
+    - `modelParameters`: initializes parameters and checks Vector dimensions
+"""
 struct modelParameters
     # trading periods and demand
     T::Int
@@ -34,9 +56,6 @@ struct modelParameters
 
     # initialize and check dimensions
     function modelParameters(T, t, d, B, mc, bmax, Qmax, rho, E, η, r, s, L, Q0, y0)
-        
-        println("T=$T, len(t)=$(length(t))")
-
         T == length(t) ||
         throw(ArgumentError("t must have length T"))
 
@@ -51,15 +70,27 @@ struct modelParameters
 
         new(T, t, d, B, mc, bmax, Qmax, rho, E, η, r, s, L, Q0, y0)
     end
-
 end;
 
-""" function to solve system for one input pair of Q, y
+
+""" Function to solve system for one input pair of Q, y
+
+    # Arguments 
+    - `stage`: current stage
+    - `QIn`: generation in previous stage (state variable)
+    - `yIn`: storage in previous stage (state variable)
+    - `BellmanVals`: bellman cost-to-go values for each [stage, Q, y] triplet
+    - `params`: struct of model parameters
+
+    # Returns
+    - `optObj`: best possible bellman cost-to-go value for iteration
+    - `QOptimal`: best Q state decision for iteration
+    - `yOptimal`: best y state decision for iteration
 """
 function solve_single_iteration(stage::Int, QIn::Int, yIn::Int, BellmanVals::Array{Float64}, params::modelParameters)#Qmax::Int, E::Int, rho::Int, r::Int, s::Int, η::Int, d::Vector{Int}, mc::Vector{Int}, bmax::Vector{Int}, L::Int)
     # unpack parameters
-    @unpack T, t, B, mc, bmax, d, Qmax, E, η, r, s, rho, L, Q0, y0 = params  # remove unnecessary params
-    
+    @unpack d, Qmax, rho, E, η, r, s, L = params  # remove unnecessary params
+
     # determine bounds for feasible Q(t) and y(t) given Q(t-1) and y(t-1) iterations
     # Note: the bounds are inclusive, i.e. Q⁻ <= Q <= Q⁺
     Q⁻ = 0
@@ -91,15 +122,8 @@ function solve_single_iteration(stage::Int, QIn::Int, yIn::Int, BellmanVals::Arr
             else
                 throw(ErrorException("Failed to decompose y into u and ηv."))
             end
-
-            # Domain check u and ηv
-            if u < 0
-                throw(DomainError(u, "u must be positive."))
-            elseif ηv <0
-                throw(DomainError(ηv, "ηv must be positive."))
-            end
             
-            # Find range of lost load required to balance supply and demand (equilibrium)
+            # Find lost load required to balance supply and demand (equilibrium)
             zEql = d[stage] - QFeas - u + ηv/η
             
             # if equilibrium is infeasible, reject solution (obj=Inf)
@@ -111,14 +135,7 @@ function solve_single_iteration(stage::Int, QIn::Int, yIn::Int, BellmanVals::Arr
             bellmanVal = BellmanVals[stage, QFeas + 1, yFeas + 1]  # works because indices of _Grid = _ value at indices - 1
 
             # Find objective
-            objSim[QFeasIdx,yFeasIdx] = gen_cost(QFeas, mc, bmax) + L*zEql + bellmanVal
-            
-            # temp = gen_cost(QFeas, mc, bmax) + L*zEql + bellmanVal
-            # if temp < 0
-            #     println("@ (Q,yFeas)=($QFeas,$yFeas), obj=$temp, cᵗ(Q)=$(gen_cost(QFeas, mc, bmax)), Lz=$(L*zEql), F=$bellmanVal")
-            # end
-
-            # println("Q=$QFeas, u=$u, v=$(ηv/η), y=$yFeas, z=$zMin")
+            objSim[QFeasIdx,yFeasIdx] = gen_cost(QFeas, params) + L*zEql + bellmanVal
         end
     end
 
@@ -131,9 +148,20 @@ function solve_single_iteration(stage::Int, QIn::Int, yIn::Int, BellmanVals::Arr
     return optObj, QOptimal, yOptimal
 end;
 
-""" calculates generation cost for given total generation
+
+""" Calculates generation cost for given total generation.
+
+    # Arguments 
+    - `Q`: Generation amount (MWh)
+    - `params`: struct of model parameters
+
+    # Returns
+    - `totalCost`: Total cost of generation (\$)
 """
-function gen_cost(Q::Int, mc::Vector, bmax::Vector)
+function gen_cost(Q::Int, params::modelParameters)
+    # unpack parameters
+    @unpack mc, bmax = params
+    
     # initialize counter
     idx = 1
     totalCost = 0
@@ -151,8 +179,11 @@ function gen_cost(Q::Int, mc::Vector, bmax::Vector)
     return totalCost
 end;
 
-""" Main function
-    Runs code to solve deterministic integer lookahead problem using dynamic methods.
+
+""" Main function:
+    1- Define model Parameters.
+    2- Solve deterministic integer lookahead problem using dynamic recursion.
+    3- Print optimal objetive and actions.
 """
 function main()
     # Define model parameters
@@ -180,16 +211,16 @@ function main()
         0       # y0
     )
 
-    @unpack T, t, d, B, mc, bmax, Qmax, rho, E, η, r, s, L, Q0, y0 = params  # remove unnecessary params
+    @unpack T, t, Qmax, E, Q0, y0 = params  # remove unnecessary params
 
     # crate a discretized grid for the two state variables: q and y
     QStateRange = 0:Qmax
     yStateRange = 0:E
 
-    # Create matrix of Inf to store bellman function values for each stage, Q, y
+    # Create matrix to store bellman function values for each stage, Q, y
     BellmanVals = fill(Inf, T, Qmax+1, E+1)
 
-    # set all t=24 entries to 0
+    # set all t=24 entries to 0 (termination condition)
     BellmanVals[end,:,:] .= 0
 
     # Create matrices to store the optimal Q(t), y(t) for each stage, Q(t-1), y(t-1)
@@ -199,49 +230,37 @@ function main()
     # objective
     finalObj = Inf
     
-    # mininize single-period equation to solve for each state/stage pair, starting at t=24
-
     # MAIN LOOP    
     for stage in reverse(t)
-    println("Start t=$stage")
 
         # special case for t=1, with known initial values
         if stage == 1
+            # call solver
             optObj, QOptimal, yOptimal = solve_single_iteration(stage, Q0, y0, BellmanVals, params)
             
-            # TODO: post solve updates to bellman and _decisions
+            # Store optimal 0-stage/1-state decisions
             finalObj = optObj
             QDecision[stage, Q0 + 1, y0 + 1] = QOptimal
             yDecision[stage, Q0 + 1, y0 + 1] = yOptimal
 
-            break
+            break  # End solver
         end
 
         # Loop over all possible values of Q(t-1) and y(t-1)
         for QState in QStateRange  # Q(t-1)
             for yState in yStateRange  # y(t-1)            
+                # Call solver
                 optObj, QOptimal, yOptimal = solve_single_iteration(stage, QState, yState, BellmanVals, params)
 
                 # Store optimal state/stage decisions
                 BellmanVals[stage - 1, QState + 1, yState + 1] = optObj
                 QDecision[stage, QState + 1, yState + 1] = QOptimal
                 yDecision[stage, QState + 1, yState + 1] = yOptimal
-
-                # println("stage=$(stage - 1); optCost=$optObj; Q(t)=$(QFeasRange[OptQIdx]), y(t)=$(yFeasRange[OptyIdx])")
             end 
         end
-
-        # TODO: find best something? Don't think there is anything
-        # ...
-
     end
 
-    # final stuff
-
-    # println(findall(==(-1),yDecision))
-    # println(count(==(-1),yDecision))
-
-
+    # Print results
     println("OBJECTIVE: $finalObj")
     println("@ t = 0: Q=$Q0, y=$y0")
     QRes = Q0
@@ -253,10 +272,6 @@ function main()
         QRes = QDecision[i, QTemp + 1, yTemp + 1]
         yRes = yDecision[i, QTemp + 1, yTemp + 1]
     end
-    # println(QDecision)
-    # println(yDecision)
-
-
 end
 
 # RUN SCRIPT
