@@ -1,10 +1,65 @@
+using UnPack
+
 #=
 Use the JuMP tutorials to solve deterministic model using dynamic recursion
 =#
 
+struct modelParameters
+    # trading periods and demand
+    T::Int
+    t::Vector{Int}
+    d::Vector{Int}
+    
+    # Generation tranches
+    B::Int
+    mc::Vector{Int}
+    bmax::Vector{Int}
+
+    # Generator specs
+    Qmax::Int
+    rho::Int
+
+    # Battery specs
+    E::Int
+    η::Int
+    r::Int
+    s::Int
+
+    # Value of Lost Load
+    L::Int
+
+    # Initial state conditions
+    Q0::Int
+    y0::Int
+
+    # initialize and check dimensions
+    function modelParameters(T, t, d, B, mc, bmax, Qmax, rho, E, η, r, s, L, Q0, y0)
+        
+        println("T=$T, len(t)=$(length(t))")
+
+        T == length(t) ||
+        throw(ArgumentError("t must have length T"))
+
+        T == length(d) ||
+        throw(ArgumentError("d must have length T"))
+
+        B == length(mc) ||
+        throw(ArgumentError("mc must have length B"))
+
+        B == length(bmax) ||
+        throw(ArgumentError("bmax must have length B"))
+
+        new(T, t, d, B, mc, bmax, Qmax, rho, E, η, r, s, L, Q0, y0)
+    end
+
+end;
+
 """ function to solve system for one input pair of Q, y
 """
-function solve_single_iteration(stage::Int, QIn::Int, yIn::Int, BellmanVals::Array{Float64}, Qmax::Int, E::Int, rho::Int, r::Int, s::Int, η::Int, d::Vector{Int}, mc::Vector{Int}, bmax::Vector{Int}, L::Int)
+function solve_single_iteration(stage::Int, QIn::Int, yIn::Int, BellmanVals::Array{Float64}, params::modelParameters)#Qmax::Int, E::Int, rho::Int, r::Int, s::Int, η::Int, d::Vector{Int}, mc::Vector{Int}, bmax::Vector{Int}, L::Int)
+    # unpack parameters
+    @unpack T, t, B, mc, bmax, d, Qmax, E, η, r, s, rho, L, Q0, y0 = params  # remove unnecessary params
+    
     # determine bounds for feasible Q(t) and y(t) given Q(t-1) and y(t-1) iterations
     # Note: the bounds are inclusive, i.e. Q⁻ <= Q <= Q⁺
     Q⁻ = 0
@@ -19,7 +74,7 @@ function solve_single_iteration(stage::Int, QIn::Int, yIn::Int, BellmanVals::Arr
     # additional matrices required to record current+future costs for each feasible Q(t),y(t).
     objSim = fill(Inf, Q⁺-Q⁻+1, y⁺-y⁻+1)  # THESE NEED TO BE WIPED AFTER LOOP...
     
-    # Loop over all the possible values of Q(t), y(t) for the given Q(t-1), y(t-1).
+    # Loop over all the possible values of Q(t), y(t) for the given QIn=Q(t-1), yIn=y(t-1).
     for (QFeasIdx, QFeas) in enumerate(QFeasRange)  # Q(t)
         for (yFeasIdx, yFeas) in enumerate(yFeasRange)  # y(t)
             # decompose y into u and ηv 
@@ -100,31 +155,32 @@ end;
     Runs code to solve deterministic integer lookahead problem using dynamic methods.
 """
 function main()
-    # STAGES
-    
-    T = 24  # final trading period index
-    t = 1:T  # trading periods
+    # Define model parameters
+    params = modelParameters(
+        24,                                             # T
+        1:24,                                  # t
+        [40, 41, 42, 43, 35, 40, 40, 25, 10, 8, 6, 5,
+        5, 6, 8, 10, 20, 30, 55, 72, 75, 70, 64, 60],   # d
 
-    # price tranches
-    B = 10  # total price tranches
-    mc = [10, 20, 30, 40, 50, 70, 90, 110, 150, 200]  # $/MWh
-    bmax = [5, 5, 5, 5, 5, 5, 10, 10, 10, 10]  # MWh
+        10,                                             # B
+        [10, 20, 30, 40, 50, 70, 90, 110, 150, 200],    # mc
+        [5, 5, 5, 5, 5, 5, 10, 10, 10, 10],             # bmax
 
-    # demand
-    d = [40, 41, 42, 43, 35, 40, 40, 25, 10, 8, 6, 5, 5, 6, 8, 10, 20, 30, 55, 72, 75, 70, 64, 60]  #MWh
+        70,     # Qmax
+        10,     # rho
 
-    # scalar
-    Qmax = 70  # MWh
-    E = 30  # MWh
-    η = 1
-    r = 15  # MWh
-    s = 15  # MWh
-    rho = 10  # MWh
-    L = 1000  # $/MWh
-    Q0 = 35  # MWh
-    y0 = 0  # MWh
-    
-    # STATES
+        30,     # E
+        1,      # η
+        15,     # r
+        15,     # s
+        
+        1000,   # L
+        
+        35,     # Q0
+        0       # y0
+    )
+
+    @unpack T, t, d, B, mc, bmax, Qmax, rho, E, η, r, s, L, Q0, y0 = params  # remove unnecessary params
 
     # crate a discretized grid for the two state variables: q and y
     QStateRange = 0:Qmax
@@ -151,7 +207,7 @@ function main()
 
         # special case for t=1, with known initial values
         if stage == 1
-            optObj, QOptimal, yOptimal = solve_single_iteration(stage, Q0, y0, BellmanVals, Qmax, E, rho, r, s, η, d, mc, bmax, L)
+            optObj, QOptimal, yOptimal = solve_single_iteration(stage, Q0, y0, BellmanVals, params)
             
             # TODO: post solve updates to bellman and _decisions
             finalObj = optObj
@@ -164,7 +220,7 @@ function main()
         # Loop over all possible values of Q(t-1) and y(t-1)
         for QState in QStateRange  # Q(t-1)
             for yState in yStateRange  # y(t-1)            
-                optObj, QOptimal, yOptimal = solve_single_iteration(stage, QState, yState, BellmanVals, Qmax, E, rho, r, s, η, d, mc, bmax, L)
+                optObj, QOptimal, yOptimal = solve_single_iteration(stage, QState, yState, BellmanVals, params)
 
                 # Store optimal state/stage decisions
                 BellmanVals[stage - 1, QState + 1, yState + 1] = optObj
