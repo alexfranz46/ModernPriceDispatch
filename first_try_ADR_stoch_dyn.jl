@@ -1,7 +1,8 @@
 using UnPack
 
 #=
-Use dynamic recursion to solve deterministic problem
+Use dynamic recursion to solve stochastic problem
+THIS WAS ORGINALLY A COPY OF first_try_ADR_dynamic.jl
 =#
 
 """ Define model
@@ -54,8 +55,12 @@ struct modelParameters
     Q0::Int
     y0::Int
 
+    # Noise
+    dNoise::Vector{Int} 
+    probNoise::Vector{Float64} 
+
     # initialize and check dimensions
-    function modelParameters(T, t, d, B, mc, bmax, Qmax, rho, E, η, r, s, L, Q0, y0)
+    function modelParameters(T, t, d, B, mc, bmax, Qmax, rho, E, η, r, s, L, Q0, y0, dNoise, probNoise)
         T == length(t) ||
         throw(ArgumentError("t must have length T"))
 
@@ -68,7 +73,13 @@ struct modelParameters
         B == length(bmax) ||
         throw(ArgumentError("bmax must have length B"))
 
-        new(T, t, d, B, mc, bmax, Qmax, rho, E, η, r, s, L, Q0, y0)
+        length(dNoise) == length(probNoise) ||
+        throw(ArgumentError("noise and probabilities must have same length"))
+
+        sum(probNoise) == 1 ||
+        throw(ArgumentError("Sum of probabilities must be 1"))
+
+        new(T, t, d, B, mc, bmax, Qmax, rho, E, η, r, s, L, Q0, y0, dNoise, probNoise)
     end
 end;
 
@@ -89,7 +100,7 @@ end;
 """
 function solve_single_iteration(stage::Int, QIn::Int, yIn::Int, BellmanVals::Array{Float64}, params::modelParameters)
     # unpack parameters
-    @unpack d, Qmax, rho, E, η, r, s, L = params  # remove unnecessary params
+    @unpack d, Qmax, rho, E, η, r, s, L, dNoise, probNoise = params
 
     # determine bounds for feasible Q(t) and y(t) given Q(t-1) and y(t-1) iterations
     # Note: the bounds are inclusive, i.e. Q⁻ <= Q <= Q⁺
@@ -111,24 +122,36 @@ function solve_single_iteration(stage::Int, QIn::Int, yIn::Int, BellmanVals::Arr
             # decompose y into u and ηv 
             yDiff = yFeas - yIn
             u, ηv = decompose_y(yDiff)
-            
-            # Find lost load required to balance supply and demand (equilibrium)
-            zEql = d[stage] - QFeas - u + ηv/η
-            
-            # Extract logical meaning from equilibrium
-            if zEql >= d[stage]  # this only occurs if Q < v, meaning that the battery is charging with non-existant generation
-                continue         # hence, this is an infeasible scenario, with a bellman function of Inf
-            elseif zEql <= 0     # this means that supply exceeds demand, and some energy is curtailed
-                zEql = 0         # hence, this is a wasteful scenario, but not directly punished and with no Lost Load
-            end
 
             # Lookup bellman function value at t, Q(t), y(t)
             bellmanVal = BellmanVals[stage, QFeas + 1, yFeas + 1]  # works because indices of _Grid = _ value at indices - 1
 
-            # Find objective
-            objSim[QFeasIdx,yFeasIdx] = gen_cost(QFeas, params) + L*zEql + bellmanVal
+            # initialize expected objective
+            tempObj = 0
+            
+            # Loop over noise possibilities
+            for θ in eachindex(dNoise)
+                # Find lost load required to balance supply and demand (equilibrium)
+                zEql = d[stage] + dNoise[θ] - QFeas - u + ηv/η
+                
+                # Extract logical meaning from equilibrium
+                if zEql >= d[stage]  # this only occurs if Q < v, meaning that the battery is charging with non-existant generation
+                    tempObj = Inf    # hence, this is an infeasible scenario, with a bellman function of Inf
+                    break
+                elseif zEql <= 0     # this means that supply exceeds demand, and some energy is curtailed
+                    zEql = 0         # hence, this is a wasteful scenario, but not directly punished and with no Lost Load
+                end
+
+                # Update expected objective
+                tempObj += probNoise[θ] * (gen_cost(QFeas, params) + L*zEql + bellmanVal)
+            end    
+            
+            # Set expected objective
+            objSim[QFeasIdx,yFeasIdx] = tempObj
         end
     end
+
+    # vscodedisplay(objSim)
 
     # return optimized answer
     optObj, optIdxPair = findmin(objSim)
@@ -254,6 +277,8 @@ function solve_deterministic_DP(params::modelParameters)
         end
     end
 
+    vscodedisplay(BellmanVals[23, :, :])
+
     # Define policy
     QPolicy = []
     yPolicy = []
@@ -274,6 +299,7 @@ function solve_deterministic_DP(params::modelParameters)
 
     return finalObj, QPolicy, yPolicy
 end;
+
 
 """ old code from above function to print results in pretty format.
 """
@@ -316,13 +342,20 @@ function main()
         1000,   # L
         
         35,     # Q0
-        0       # y0
+        0,      # y0
+
+        [-4, -2, 0, 2, 4],          # dNoise
+        [0.2, 0.2, 0.2, 0.2, 0.2]   # probNoise
     )
+
+    # BellmanVals = fill(0.0, 24, 71, 31)
+    # solve_single_iteration(24, 60, 0, BellmanVals, params)
 
     # Solve
     obj, Q, y = solve_deterministic_DP(params)
     
     # display answer
+    println("paper got: 52,377")
     println(obj)
     println(Q)
     println(y)
