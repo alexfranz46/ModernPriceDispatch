@@ -87,7 +87,7 @@ end;
     - `QOptimal`: best Q state decision for iteration
     - `yOptimal`: best y state decision for iteration
 """
-function solve_single_iteration(stage::Int, QIn::Int, yIn::Int, BellmanVals::Array{Float64}, params::modelParameters)#Qmax::Int, E::Int, rho::Int, r::Int, s::Int, η::Int, d::Vector{Int}, mc::Vector{Int}, bmax::Vector{Int}, L::Int)
+function solve_single_iteration(stage::Int, QIn::Int, yIn::Int, BellmanVals::Array{Float64}, params::modelParameters)
     # unpack parameters
     @unpack d, Qmax, rho, E, η, r, s, L = params  # remove unnecessary params
 
@@ -110,25 +110,16 @@ function solve_single_iteration(stage::Int, QIn::Int, yIn::Int, BellmanVals::Arr
         for (yFeasIdx, yFeas) in enumerate(yFeasRange)  # y(t)
             # decompose y into u and ηv 
             yDiff = yFeas - yIn
-            if yDiff == 0
-                u = 0
-                ηv = 0
-            elseif yDiff >= 0
-                u = 0
-                ηv = yDiff
-            elseif yDiff <= 0
-                u = -yDiff
-                ηv = 0
-            else
-                throw(ErrorException("Failed to decompose y into u and ηv."))
-            end
+            u, ηv = decompose_y(yDiff)
             
             # Find lost load required to balance supply and demand (equilibrium)
             zEql = d[stage] - QFeas - u + ηv/η
             
-            # if equilibrium is infeasible, reject solution (obj=Inf)
-            if !(0 <= zEql <= d[stage])
-                continue
+            # extract logical meaning from equilibrium
+            if zEql >= d[stage]  # this only occurs if Q < v, meaning that the battery is charging with non-existant generation
+                continue         # hence, this is an infeasible scenario, with a bellman function of Inf
+            elseif zEql <= 0     # this means that supply exceeds demand, and some energy is curtailed
+                zEql = 0         # hence, this is a wasteful scenario, but not directly punished and with no Lost Load
             end
 
             # Lookup bellman function value at t, Q(t), y(t)
@@ -147,6 +138,33 @@ function solve_single_iteration(stage::Int, QIn::Int, yIn::Int, BellmanVals::Arr
     
     return optObj, QOptimal, yOptimal
 end;
+
+
+""" Decomposes y into components u and ηv
+
+    # Arguments
+    - `yDiff`: y(t) - y(t-1)
+
+    # Returns
+    - `u`: discharging
+    - `ηv`: charging accounting for round-trip losses
+"""
+function decompose_y(yDiff::Int)
+    if yDiff == 0
+        u = 0
+        ηv = 0
+    elseif yDiff >= 0
+        u = 0
+        ηv = yDiff
+    elseif yDiff <= 0
+        u = -yDiff
+        ηv = 0
+    else
+        throw(ErrorException("Failed to decompose y into u and ηv."))
+    end
+
+    return u, ηv
+end
 
 
 """ Calculates generation cost for given total generation.
@@ -185,31 +203,7 @@ end;
     2- Solve deterministic integer lookahead problem using dynamic recursion.
     3- Print optimal objetive and actions.
 """
-function main()
-    # Define model parameters
-    params = modelParameters(
-        24,                                             # T
-        1:24,                                  # t
-        [40, 41, 42, 43, 35, 40, 40, 25, 10, 8, 6, 5,
-        5, 6, 8, 10, 20, 30, 55, 72, 75, 70, 64, 60],   # d
-
-        10,                                             # B
-        [10, 20, 30, 40, 50, 70, 90, 110, 150, 200],    # mc
-        [5, 5, 5, 5, 5, 5, 10, 10, 10, 10],             # bmax
-
-        70,     # Qmax
-        10,     # rho
-
-        30,     # E
-        1,      # η
-        15,     # r
-        15,     # s
-        
-        1000,   # L
-        
-        35,     # Q0
-        0       # y0
-    )
+function solve_deterministic_DP(params::modelParameters)
 
     @unpack T, t, Qmax, E, Q0, y0 = params  # remove unnecessary params
 
@@ -260,19 +254,79 @@ function main()
         end
     end
 
-    # Print results
-    println("OBJECTIVE: $finalObj")
-    println("@ t = 0: Q=$Q0, y=$y0")
-    QRes = Q0
-    yRes = y0
-    for i in t
-        println("@ t = $i: Q=$(QDecision[i, QRes + 1, yRes + 1]), y=$(yDecision[i, QRes + 1, yRes + 1])")
-        QTemp = QRes
-        yTemp = yRes
-        QRes = QDecision[i, QTemp + 1, yTemp + 1]
-        yRes = yDecision[i, QTemp + 1, yTemp + 1]
+    # Define policy
+    QPolicy = []
+    yPolicy = []
+    for ti in t
+        # Store values in temporary vars
+        if ti == 1
+            QTemp = Q0
+            yTemp = y0
+        else
+            QTemp = QPolicy[end]
+            yTemp = yPolicy[end]
+        end
+
+        # Append optimal decision to policy 
+        push!(QPolicy, QDecision[ti, QTemp + 1, yTemp + 1])
+        push!(yPolicy, yDecision[ti, QTemp + 1, yTemp + 1])
     end
-end
+
+    return finalObj, QPolicy, yPolicy
+end;
+
+""" old code from above function to print results in pretty format.
+"""
+# function printPolicy()
+#     # Print results
+#     println("OBJECTIVE: $finalObj")
+#     println("@ t = 0: Q=$Q0, y=$y0")
+#     QRes = Q0
+#     yRes = y0
+#     for i in t
+#         println("@ t = $i: Q=$(QDecision[i, QRes + 1, yRes + 1]), y=$(yDecision[i, QRes + 1, yRes + 1])")
+#         QTemp = QRes
+#         yTemp = yRes
+#         QRes = QDecision[i, QTemp + 1, yTemp + 1]
+#         yRes = yDecision[i, QTemp + 1, yTemp + 1]
+#     end
+# end;
+
+
+function main()
+    # Define model parameters
+    params = modelParameters(
+        24,                                             # T
+        1:24,                                           # t
+        [40, 41, 42, 43, 35, 40, 40, 25, 10, 8, 6, 5,
+        5, 6, 8, 10, 20, 30, 55, 72, 75, 70, 64, 60],   # d
+
+        10,                                             # B
+        [10, 20, 30, 40, 50, 70, 90, 110, 150, 200],    # mc
+        [5, 5, 5, 5, 5, 5, 10, 10, 10, 10],             # bmax
+
+        70,     # Qmax
+        10,     # rho
+
+        30,     # E
+        1,      # η
+        15,     # r
+        15,     # s
+        
+        1000,   # L
+        
+        35,     # Q0
+        0       # y0
+    )
+
+    # Solve
+    obj, Q, y = solve_deterministic_DP(params)
+    
+    # display answer
+    println(obj)
+    println(Q)
+    println(y)
+end;
 
 # RUN SCRIPT
-main()
+main();
