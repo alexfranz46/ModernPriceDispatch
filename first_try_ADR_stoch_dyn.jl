@@ -23,6 +23,9 @@ THIS WAS ORGINALLY A COPY OF first_try_ADR_dynamic.jl
     - `L`: Value of Lost Loas (\$/MWh)
     - `Q0`: initial generation
     - `y0`: initial storage
+    - `noiseScenarios`: count of noise scenarios considered
+    - `dNoise`: array of possible demand noise values (MWh)
+    - `probNoise`: respective probabilities of noise above
 
     # Constructors
     - `modelParameters`: initializes parameters and checks Vector dimensions
@@ -56,11 +59,12 @@ struct modelParameters
     y0::Int
 
     # Noise
+    noiseScenarios::Int
     dNoise::Vector{Int} 
     probNoise::Vector{Float64} 
 
     # initialize and check dimensions
-    function modelParameters(T, t, d, B, mc, bmax, Qmax, rho, E, η, r, s, L, Q0, y0, dNoise, probNoise)
+    function modelParameters(T, t, d, B, mc, bmax, Qmax, rho, E, η, r, s, L, Q0, y0, noiseScenarios, dNoise, probNoise)
         T == length(t) ||
         throw(ArgumentError("t must have length T"))
 
@@ -73,13 +77,16 @@ struct modelParameters
         B == length(bmax) ||
         throw(ArgumentError("bmax must have length B"))
 
-        length(dNoise) == length(probNoise) ||
-        throw(ArgumentError("noise and probabilities must have same length"))
+        noiseScenarios == length(dNoise) ||
+        throw(ArgumentError("dNoise must have same length noiseScenarios"))
+        
+        noiseScenarios == length(probNoise) ||
+        throw(ArgumentError("probNoise must have same length noiseScenarios"))
 
         sum(probNoise) == 1 ||
         throw(ArgumentError("Sum of probabilities must be 1"))
 
-        new(T, t, d, B, mc, bmax, Qmax, rho, E, η, r, s, L, Q0, y0, dNoise, probNoise)
+        new(T, t, d, B, mc, bmax, Qmax, rho, E, η, r, s, L, Q0, y0, noiseScenarios, dNoise, probNoise)
     end
 end;
 
@@ -100,7 +107,7 @@ end;
 """
 function solve_single_iteration(stage::Int, QIn::Int, yIn::Int, BellmanVals::Array{Float64}, params::modelParameters)
     # unpack parameters
-    @unpack d, Qmax, rho, E, η, r, s, L, dNoise, probNoise = params
+    @unpack d, Qmax, rho, E, η, r, s, L, noiseScenarios, dNoise, probNoise = params
 
     # determine bounds for feasible Q(t) and y(t) given Q(t-1) and y(t-1) iterations
     # Note: the bounds are inclusive, i.e. Q⁻ <= Q <= Q⁺
@@ -113,9 +120,60 @@ function solve_single_iteration(stage::Int, QIn::Int, yIn::Int, BellmanVals::Arr
     QFeasRange = Q⁻:Q⁺
     yFeasRange = y⁻:y⁺
 
-    # additional matrices required to record current+future costs for each feasible Q(t),y(t).
-    objSim = fill(Inf, Q⁺-Q⁻+1, y⁺-y⁻+1)  # THESE NEED TO BE WIPED AFTER LOOP...
+    # initialize return arrays
+    tempObj = fill(Inf, noiseScenarios)
+    QOptimal = fill(Inf, noiseScenarios)
+    yOptimal = fill(Inf, noiseScenarios)
     
+    # Loop over noise scenarios
+    for θ in eachindex(dNoise)
+        # Find actual demand
+        dReal = d[stage] + dNoise[θ]
+
+        # initialize objective
+        # additional matrices required to record current+future costs for each feasible Q(t),y(t).
+        objSim = fill(Inf, Q⁺-Q⁻+1, y⁺-y⁻+1)  # THESE NEED TO BE WIPED AFTER LOOP...
+
+        # Loop over all the possible values of Q(t), y(t) for the given QIn=Q(t-1), yIn=y(t-1).
+        for (QFeasIdx, QFeas) in enumerate(QFeasRange)  # Q(t)
+            for (yFeasIdx, yFeas) in enumerate(yFeasRange)  # y(t)
+                # decompose y into u and ηv 
+                yDiff = yFeas - yIn
+                u, ηv = decompose_y(yDiff)
+                
+                # Find lost load required to balance supply and demand (equilibrium)
+                zEql = dReal - QFeas - u + ηv/η
+                
+                # Extract logical meaning from equilibrium
+                if zEql > dReal     # this only occurs if Q < v, meaning that the battery is charging with non-existant generation
+                    continue        # hence, this is an infeasible scenario, with a bellman function of Inf
+                elseif zEql < 0     # this means that supply exceeds demand, and some energy is curtailed
+                    zEql = 0        # hence, this is a wasteful scenario, but not directly punished and with no Lost Load
+                end
+
+                # Lookup bellman function value at t, Q(t), y(t)
+                bellmanVal = BellmanVals[stage, QFeas + 1, yFeas + 1]  # works because indices of _Grid = _ value at indices - 1
+
+                # Find objective
+                objSim[QFeasIdx,yFeasIdx] = gen_cost(QFeas, params) + L*zEql + bellmanVal
+            end
+        end
+
+        # return optimized answer for noise scenario
+        tempObj[θ], optIdxPair = findmin(objSim)
+        OptQIdx, OptyIdx = Tuple(optIdxPair)
+        QOptimal[θ] = QFeasRange[OptQIdx]
+        yOptimal[θ] = yFeasRange[OptyIdx]
+
+    end
+
+    # find expected objective using dot product with probablities
+    optObj = sum(tempObj .* probNoise)
+
+    return optObj, QOptimal, yOptimal
+    
+    # OLD WAY FOR REFERENCE; REMOVE WHEN DONE?
+
     # Loop over all the possible values of Q(t), y(t) for the given QIn=Q(t-1), yIn=y(t-1).
     for (QFeasIdx, QFeas) in enumerate(QFeasRange)  # Q(t)
         for (yFeasIdx, yFeas) in enumerate(yFeasRange)  # y(t)
@@ -131,16 +189,20 @@ function solve_single_iteration(stage::Int, QIn::Int, yIn::Int, BellmanVals::Arr
             
             # Loop over noise possibilities
             for θ in eachindex(dNoise)
+                # Find actal demand
+                dReal = d[stage] + dNoise[θ]
+                
                 # Find lost load required to balance supply and demand (equilibrium)
-                zEql = d[stage] + dNoise[θ] - QFeas - u + ηv/η
+                zEql = dReal - QFeas - u + ηv/η
                 
                 # Extract logical meaning from equilibrium
-                if zEql >= d[stage]  # this only occurs if Q < v, meaning that the battery is charging with non-existant generation
-                    tempObj = Inf    # hence, this is an infeasible scenario, with a bellman function of Inf
+                if zEql > dReal     # this only occurs if Q < v, meaning that the battery is charging with non-existant generation
+                    tempObj = Inf   # hence, this is an infeasible scenario, with a bellman function of Inf
                     break
-                elseif zEql <= 0     # this means that supply exceeds demand, and some energy is curtailed
-                    zEql = 0         # hence, this is a wasteful scenario, but not directly punished and with no Lost Load
+                elseif zEql < 0     # this means that supply exceeds demand, and some energy is curtailed
+                    zEql = 0        # hence, this is a wasteful scenario, but not directly punished and with no Lost Load
                 end
+                # TODO: instead, let QFeas be reduced by amount to make zEql=0?
 
                 # Update expected objective
                 tempObj += probNoise[θ] * (gen_cost(QFeas, params) + L*zEql + bellmanVal)
@@ -226,29 +288,30 @@ end;
     2- Solve deterministic integer lookahead problem using dynamic recursion.
     3- Print optimal objetive and actions.
 """
-function solve_deterministic_DP(params::modelParameters)
+function solve_stochastic_DP(params::modelParameters)
 
-    @unpack T, t, Qmax, E, Q0, y0 = params  # remove unnecessary params
+    @unpack T, t, Qmax, E, Q0, y0, noiseScenarios, dNoise = params  # remove unnecessary params
 
     # crate a discretized grid for the two state variables: q and y
     QStateRange = 0:Qmax
     yStateRange = 0:E
 
-    # Create matrix to store bellman function values for each stage, Q, y
+    # Create matrix to store expected bellman function values for each stage, Q, y
     BellmanVals = fill(Inf, T, Qmax+1, E+1)
 
     # set all t=24 entries to 0 (termination condition)
     BellmanVals[end,:,:] .= 0
 
     # Create matrices to store the optimal Q(t), y(t) for each stage, Q(t-1), y(t-1)
-    QDecision = fill(-1, T, Qmax+1, E+1)
-    yDecision = fill(-1, T, Qmax+1, E+1)
+    QDecision = fill(-1, T, noiseScenarios, Qmax+1, E+1)
+    yDecision = fill(-1, T, noiseScenarios, Qmax+1, E+1)
 
     # objective
     finalObj = Inf
     
     # MAIN LOOP    
     for stage in reverse(t)
+        # println("Solve stage #$stage")
 
         # special case for t=1, with known initial values
         if stage == 1
@@ -257,8 +320,8 @@ function solve_deterministic_DP(params::modelParameters)
             
             # Store optimal 0-stage/1-state decisions
             finalObj = optObj
-            QDecision[stage, Q0 + 1, y0 + 1] = QOptimal
-            yDecision[stage, Q0 + 1, y0 + 1] = yOptimal
+            QDecision[stage, :, Q0 + 1, y0 + 1] = QOptimal
+            yDecision[stage, :, Q0 + 1, y0 + 1] = yOptimal
 
             break  # End solver
         end
@@ -271,33 +334,56 @@ function solve_deterministic_DP(params::modelParameters)
 
                 # Store optimal state/stage decisions
                 BellmanVals[stage - 1, QState + 1, yState + 1] = optObj
-                QDecision[stage, QState + 1, yState + 1] = QOptimal
-                yDecision[stage, QState + 1, yState + 1] = yOptimal
+                QDecision[stage, :, QState + 1, yState + 1] = QOptimal
+                yDecision[stage, :, QState + 1, yState + 1] = yOptimal
             end 
         end
     end
 
-    vscodedisplay(BellmanVals[23, :, :])
+    # TODO: Remove? Policy cannot be defined for stochastic, just retrun optimal action array.
+    # # Define policy
+    # QPolicy = fill(-1, T, noiseScenarios)
+    # yPolicy = fill(-1, T, noiseScenarios)
+    # for ti in t
+    #     # Store values in temporary vars
+    #     if ti == 1
+    #         QTemp = Q0
+    #         yTemp = y0
+    #     else
+    #         QTemp = QPolicy[ti - 1, :]
+    #         yTemp = yPolicy[ti - 1, :]
+    #     end
 
-    # Define policy
-    QPolicy = []
-    yPolicy = []
-    for ti in t
-        # Store values in temporary vars
-        if ti == 1
-            QTemp = Q0
-            yTemp = y0
-        else
-            QTemp = QPolicy[end]
-            yTemp = yPolicy[end]
+    #     # Save optimal decision to policy 
+    #     QPolicy[ti, :] = QDecision[ti, :, QTemp + 1, yTemp + 1]
+    #     yPolicy[ti, :] = yDecision[ti, :, QTemp + 1, yTemp + 1]
+    #     # push!(QPolicy, QDecision[ti, :, QTemp + 1, yTemp + 1])
+    #     # push!(yPolicy, yDecision[ti, :, QTemp + 1, yTemp + 1])
+    # end
+
+    # Displays
+    if false
+        tDisp = 18
+        # vscodedisplay(QDecision[tDisp,1,:,:], "Q[t=$tDisp]")
+        # vscodedisplay(yDecision[tDisp,1,:,:], "y[t=$tDisp]")
+        for i in 1:noiseScenarios
+            vscodedisplay(QDecision[tDisp,i,:,:], "Q[t=$tDisp,θ=$(dNoise[i])]")
+            vscodedisplay(yDecision[tDisp,i,:,:], "y[t=$tDisp,θ=$(dNoise[i])]")
         end
-
-        # Append optimal decision to policy 
-        push!(QPolicy, QDecision[ti, QTemp + 1, yTemp + 1])
-        push!(yPolicy, yDecision[ti, QTemp + 1, yTemp + 1])
     end
 
-    return finalObj, QPolicy, yPolicy
+    if false
+        for ti in 1:T
+            vscodedisplay(BellmanVals[ti,:,:], "V(t=$ti)")
+        end
+    end
+
+    # for debugging
+    global BellmanVals
+    global QDecision
+    global yDecision
+
+    return finalObj, QDecision, yDecision
 end;
 
 
@@ -344,21 +430,21 @@ function main()
         35,     # Q0
         0,      # y0
 
+        5,                          # noiseScenarios
         [-4, -2, 0, 2, 4],          # dNoise
         [0.2, 0.2, 0.2, 0.2, 0.2]   # probNoise
+        # [-4, -2, 0, 8, 16],         # dNoise
+        # [0.2, 0.2, 0.5, 0.05, 0.05] # probNoise
     )
 
-    # BellmanVals = fill(0.0, 24, 71, 31)
-    # solve_single_iteration(24, 60, 0, BellmanVals, params)
-
     # Solve
-    obj, Q, y = solve_deterministic_DP(params)
+    obj, Q, y = solve_stochastic_DP(params)
     
     # display answer
-    println("paper got: 52,377")
-    println(obj)
-    println(Q)
-    println(y)
+    # println("paper got: 52,377")
+    # println(obj)
+    # println(Q)
+    # println(y)
 end;
 
 # RUN SCRIPT

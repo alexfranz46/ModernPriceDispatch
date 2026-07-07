@@ -116,10 +116,10 @@ function solve_single_iteration(stage::Int, QIn::Int, yIn::Int, BellmanVals::Arr
             zEql = d[stage] - QFeas - u + ηv/η
             
             # Extract logical meaning from equilibrium
-            if zEql >= d[stage]  # this only occurs if Q < v, meaning that the battery is charging with non-existant generation
-                continue         # hence, this is an infeasible scenario, with a bellman function of Inf
-            elseif zEql <= 0     # this means that supply exceeds demand, and some energy is curtailed
-                zEql = 0         # hence, this is a wasteful scenario, but not directly punished and with no Lost Load
+            if zEql > d[stage]  # this only occurs if Q < v, meaning that the battery is charging with non-existant generation
+                continue        # hence, this is an infeasible scenario, with a bellman function of Inf
+            elseif zEql < 0     # this means that supply exceeds demand, and some energy is curtailed
+                zEql = 0        # hence, this is a wasteful scenario, but not directly punished and with no Lost Load
             end
 
             # Lookup bellman function value at t, Q(t), y(t)
