@@ -149,10 +149,11 @@ function solve_single_iteration(stage::Int, QIn::Int, yIn::Int, BellmanVals::Arr
                     continue        # hence, this is an infeasible scenario, with a bellman function of Inf
                 elseif zEql < 0     # this means that supply exceeds demand, and some energy is curtailed
                     zEql = 0        # hence, this is a wasteful scenario, but not directly punished and with no Lost Load
+                    # continue        # this version means spilling/curtailment of electricity is not allowed. THIS IS WHAT ANDY DOES!
                 end
 
                 # Lookup bellman function value at t, Q(t), y(t)
-                bellmanVal = BellmanVals[stage, QFeas + 1, yFeas + 1]  # works because indices of _Grid = _ value at indices - 1
+                bellmanVal = BellmanVals[stage + 1, QFeas + 1, yFeas + 1]  # works because indices of _Grid = _ value at indices - 1
 
                 # Find objective
                 objSim[QFeasIdx,yFeasIdx] = gen_cost(QFeas, params) + L*zEql + bellmanVal
@@ -172,56 +173,55 @@ function solve_single_iteration(stage::Int, QIn::Int, yIn::Int, BellmanVals::Arr
 
     return optObj, QOptimal, yOptimal
     
-    # OLD WAY FOR REFERENCE; REMOVE WHEN DONE?
+    # # BELOW IS A HERE-AND-NOW SOLVER
 
-    # Loop over all the possible values of Q(t), y(t) for the given QIn=Q(t-1), yIn=y(t-1).
-    for (QFeasIdx, QFeas) in enumerate(QFeasRange)  # Q(t)
-        for (yFeasIdx, yFeas) in enumerate(yFeasRange)  # y(t)
-            # decompose y into u and ηv 
-            yDiff = yFeas - yIn
-            u, ηv = decompose_y(yDiff)
+    # # Loop over all the possible values of Q(t), y(t) for the given QIn=Q(t-1), yIn=y(t-1).
+    # for (QFeasIdx, QFeas) in enumerate(QFeasRange)  # Q(t)
+    #     for (yFeasIdx, yFeas) in enumerate(yFeasRange)  # y(t)
+    #         # decompose y into u and ηv 
+    #         yDiff = yFeas - yIn
+    #         u, ηv = decompose_y(yDiff)
 
-            # Lookup bellman function value at t, Q(t), y(t)
-            bellmanVal = BellmanVals[stage, QFeas + 1, yFeas + 1]  # works because indices of _Grid = _ value at indices - 1
+    #         # Lookup bellman function value at t, Q(t), y(t)
+    #         bellmanVal = BellmanVals[stage, QFeas + 1, yFeas + 1]  # works because indices of _Grid = _ value at indices - 1
 
-            # initialize expected objective
-            tempObj = 0
+    #         # initialize expected objective
+    #         tempObj = 0
             
-            # Loop over noise possibilities
-            for θ in eachindex(dNoise)
-                # Find actal demand
-                dReal = d[stage] + dNoise[θ]
+    #         # Loop over noise possibilities
+    #         for θ in eachindex(dNoise)
+    #             # Find actal demand
+    #             dReal = d[stage] + dNoise[θ]
                 
-                # Find lost load required to balance supply and demand (equilibrium)
-                zEql = dReal - QFeas - u + ηv/η
+    #             # Find lost load required to balance supply and demand (equilibrium)
+    #             zEql = dReal - QFeas - u + ηv/η
                 
-                # Extract logical meaning from equilibrium
-                if zEql > dReal     # this only occurs if Q < v, meaning that the battery is charging with non-existant generation
-                    tempObj = Inf   # hence, this is an infeasible scenario, with a bellman function of Inf
-                    break
-                elseif zEql < 0     # this means that supply exceeds demand, and some energy is curtailed
-                    zEql = 0        # hence, this is a wasteful scenario, but not directly punished and with no Lost Load
-                end
-                # TODO: instead, let QFeas be reduced by amount to make zEql=0?
+    #             # Extract logical meaning from equilibrium
+    #             if zEql > dReal     # this only occurs if Q < v, meaning that the battery is charging with non-existant generation
+    #                 tempObj = Inf   # hence, this is an infeasible scenario, with a bellman function of Inf
+    #                 break
+    #             elseif zEql < 0     # this means that supply exceeds demand, and some energy is curtailed
+    #                 zEql = 0        # hence, this is a wasteful scenario, but not directly punished and with no Lost Load
+    #             end
 
-                # Update expected objective
-                tempObj += probNoise[θ] * (gen_cost(QFeas, params) + L*zEql + bellmanVal)
-            end    
+    #             # Update expected objective
+    #             tempObj += probNoise[θ] * (gen_cost(QFeas, params) + L*zEql + bellmanVal)
+    #         end    
             
-            # Set expected objective
-            objSim[QFeasIdx,yFeasIdx] = tempObj
-        end
-    end
+    #         # Set expected objective
+    #         objSim[QFeasIdx,yFeasIdx] = tempObj
+    #     end
+    # end
 
-    # vscodedisplay(objSim)
+    # # vscodedisplay(objSim)
 
-    # return optimized answer
-    optObj, optIdxPair = findmin(objSim)
-    OptQIdx, OptyIdx = Tuple(optIdxPair)
-    QOptimal = QFeasRange[OptQIdx]
-    yOptimal = yFeasRange[OptyIdx]
+    # # return optimized answer
+    # optObj, optIdxPair = findmin(objSim)
+    # OptQIdx, OptyIdx = Tuple(optIdxPair)
+    # QOptimal = QFeasRange[OptQIdx]
+    # yOptimal = yFeasRange[OptyIdx]
     
-    return optObj, QOptimal, yOptimal
+    # return optObj, QOptimal, yOptimal
 end;
 
 
@@ -297,7 +297,7 @@ function solve_stochastic_DP(params::modelParameters)
     yStateRange = 0:E
 
     # Create matrix to store expected bellman function values for each stage, Q, y
-    BellmanVals = fill(Inf, T, Qmax+1, E+1)
+    BellmanVals = fill(Inf, T + 1, Qmax+1, E+1)
 
     # set all t=24 entries to 0 (termination condition)
     BellmanVals[end,:,:] .= 0
@@ -314,17 +314,20 @@ function solve_stochastic_DP(params::modelParameters)
         # println("Solve stage #$stage")
 
         # special case for t=1, with known initial values
-        if stage == 1
-            # call solver
-            optObj, QOptimal, yOptimal = solve_single_iteration(stage, Q0, y0, BellmanVals, params)
+        # if stage == 1
+        #     # call solver
+        #     optObj, QOptimal, yOptimal = solve_single_iteration(stage, Q0, y0, BellmanVals, params)
             
-            # Store optimal 0-stage/1-state decisions
-            finalObj = optObj
-            QDecision[stage, :, Q0 + 1, y0 + 1] = QOptimal
-            yDecision[stage, :, Q0 + 1, y0 + 1] = yOptimal
+        #     # Store optimal 0-stage/1-state decisions
+        #     BellmanVals[stage, Q0 + 1, y0 + 1] = optObj
+        #     QDecision[stage, :, Q0 + 1, y0 + 1] = QOptimal
+        #     yDecision[stage, :, Q0 + 1, y0 + 1] = yOptimal
 
-            break  # End solver
-        end
+        #     # find objective for starting conditions
+        #     finalObj = BellmanVals[1, Q0 + 1, y0 + 1]
+
+        #     break  # End solver
+        # end
 
         # Loop over all possible values of Q(t-1) and y(t-1)
         for QState in QStateRange  # Q(t-1)
@@ -333,12 +336,15 @@ function solve_stochastic_DP(params::modelParameters)
                 optObj, QOptimal, yOptimal = solve_single_iteration(stage, QState, yState, BellmanVals, params)
 
                 # Store optimal state/stage decisions
-                BellmanVals[stage - 1, QState + 1, yState + 1] = optObj
+                BellmanVals[stage, QState + 1, yState + 1] = optObj
                 QDecision[stage, :, QState + 1, yState + 1] = QOptimal
                 yDecision[stage, :, QState + 1, yState + 1] = yOptimal
             end 
         end
     end
+
+    # find objective for starting conditions
+    finalObj = BellmanVals[1, Q0 + 1, y0 + 1]
 
     # TODO: Remove? Policy cannot be defined for stochastic, just retrun optimal action array.
     # # Define policy
@@ -373,9 +379,12 @@ function solve_stochastic_DP(params::modelParameters)
     end
 
     if false
-        for ti in 1:T
-            vscodedisplay(BellmanVals[ti,:,:], "V(t=$ti)")
-        end
+        tDisp = 1
+        vscodedisplay(BellmanVals[tDisp,:,:], "V(t=$tDisp)")
+        global tempV = BellmanVals[tDisp,:,:]
+        # for ti in 1:T
+        #     vscodedisplay(BellmanVals[ti,:,:], "V(t=$ti)")
+        # end
     end
 
     # for debugging
@@ -431,10 +440,10 @@ function main()
         0,      # y0
 
         5,                          # noiseScenarios
-        [-4, -2, 0, 2, 4],          # dNoise
-        [0.2, 0.2, 0.2, 0.2, 0.2]   # probNoise
-        # [-4, -2, 0, 8, 16],         # dNoise
-        # [0.2, 0.2, 0.5, 0.05, 0.05] # probNoise
+        # [-4, -2, 0, 2, 4],          # dNoise
+        # [0.2, 0.2, 0.2, 0.2, 0.2]   # probNoise
+        [-4, -2, 0, 8, 16],         # dNoise
+        [0.2, 0.2, 0.5, 0.05, 0.05] # probNoise
     )
 
     # Solve
@@ -442,7 +451,7 @@ function main()
     
     # display answer
     # println("paper got: 52,377")
-    # println(obj)
+    println(obj)
     # println(Q)
     # println(y)
 end;
