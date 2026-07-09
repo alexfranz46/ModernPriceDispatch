@@ -10,7 +10,7 @@ use dynamic recursion to sovle stochastic demand problem:
     d +- ε = {-4, -2, 0, 2, 4}, with equal probabilities.
 =#
 
-function solve_stochastic_using_policy(totalSamples::Int, noiseDist::Distribution, QPolicy::Array{}, yPolicy::Array{}, params::modelParameters)
+function solve_using_stochastic_policy(totalSamples::Int, noiseDist::Distribution, QPolicy::Array{}, yPolicy::Array{}, params::modelParameters)
     # unpack parameters
     @unpack T, t, d, η, L, Q0, y0, dNoise = params
     
@@ -149,13 +149,13 @@ function run()
     # yPolicy = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 11, 19, 26, 28, 30, 25, 13, 0, 0, 0, 0]
 
     # Solve
-    simObj, QCurt = solve_stochastic_using_policy(totalSamples, noiseDist, QPolicy, yPolicy, params);
+    simObj, QCurt = solve_using_stochastic_policy(totalSamples, noiseDist, QPolicy, yPolicy, params);
 
     println("optimal: $objExpect")
 
     # collect and print expected value
     μ = mean(simObj)
-    sErr = mean((simObj.-μ).^2)/totalSamples
+    sErr = sqrt(mean((simObj.-μ).^2)/(totalSamples))
     println("E[x]=$μ +- $sErr")
     h = histogram(simObj)
     display(h)
