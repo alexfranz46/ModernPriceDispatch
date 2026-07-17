@@ -3,6 +3,10 @@ using CSV
 using StatsBase
 using Dates 
 using TimeZones
+using Random
+using Distributions
+using Serialization
+using Plots
 
 #=  Stochastic dynamic method to optimize BESS usage in 5min increments 
     while ignoring gate closure.
@@ -17,7 +21,6 @@ function find_band(p::Float64, bounds::Vector{Float64})
             return i - 1
         end
     end
-    return length(bounds) + 1   # the final band (upper bound = Inf)
 end
 
 # set fineness of temporal mesh
@@ -39,6 +42,10 @@ df = vcat([CSV.read(file, DataFrame) for file in csv_files]...)
 # Keep only OTA2201 connection point data
 df = filter(:PointOfConnection => p -> p == "OTA2201", df)
 
+# TODO: CHANGE LOGIC TO INCORPORATE THEM instead
+# remove daylight saving trading period 49 and 50
+df = filter(:TradingPeriod => tp -> tp <= 48, df)
+
 # Keep only date, trading period and price data
 select!(df, [:TradingDate, :TradingPeriod, :DollarsPerMegawattHour])
 
@@ -50,7 +57,7 @@ println("Finished tidying data.")
 # Define price bands
 # For band i: lb = bounds[i], ub = bounds[i+1]
 # since prices tend to cluster for low values, p is in a band if: lb < p <= ub
-numBands = 5
+numBands = 10
 deciles = range(0, 1, length = numBands+1)[2:end-1]
 PriceBounds = Matrix{Float64}(undef, numBands+1, TP)
 PriceBounds[1,:] .= -Inf
@@ -124,6 +131,9 @@ end
 
 println("Markovian price process fully defined.")
 
+# serialize("TransitionMatrix.jls", TransitionMatrix)
+# serialize("PriceVals.jls", PriceVals)
+
 # Code below is mostly copied form BESS_optimal_stoch_dyn.jl
 
 # With out Markovian process, instead of iterating over noise, we iterate of each band
@@ -143,7 +153,7 @@ BellmanVals = fill(Inf, T + 1, E+1, numBands)
 BellmanVals[end,:,:] .= 0  # (termination condition)
 
 # Create matrices to store the optimal y(t) for each stage, y(t-1) and p
-yDecision = fill(-1, T, numBands, E+1, numBands)  # first numBands is pNext, second is stage var pNow
+yDecision = fill(-1, T, E+1, numBands)  # first numBands is pNext, second is stage var pNow
 
 for stage in reverse(t)
     tp = ceil(Int, stage/6)
@@ -152,78 +162,93 @@ for stage in reverse(t)
         # price stage variable
         pNow = PriceVals[i, tp]
 
-        for yNow in 0:E  # y(t)
+        for yIn in 0:E  # y(t-1)
             # Lower bound for y based on y stage varaible
-            y⁻ = max(0, yNow - r)
-            y⁺ = min(E, yNow + s)
+            y⁻ = max(0, yIn - r)
+            y⁺ = min(E, yIn + s)
             yRange = y⁻:y⁺
 
             # initialize solution
-            tempObj = fill(Inf, numBands)
-            yOptimal = fill(Inf, numBands)
+            objSim = fill(Inf, y⁺-y⁻+1)
 
-            for j in 1:numBands  # p(t+1) [NOTE: Independent of pNow]
-                # TODO this price could be in a different tp...
-                # TODO Should this be a here and now decision?
-                # TODO 
-                
-                # matrix to record cost to go before expectation
-                objSim = fill(Inf, y⁺-y⁻+1)
+            for (yIdx, yNext) in enumerate(yRange)  # y(t+1)
+                # calculate expected bellman value (here-and-now over j)
+                expBellmanVal = sum(BellmanVals[stage + 1, yNext + 1, :] .* TransitionMatrix[i, :, tp])  # This is NaN
 
-                for (yIdx, yNext) in enumerate(yRange)  # y(t+1)
-                    # find discharge
-                    yDiff = yNext - yNow
-                    if yDiff == 0
-                        u = 0
-                        v = 0
-                    elseif yDiff >= 0
-                        u = 0
-                        v = yDiff
-                    elseif yDiff <= 0
-                        u = -yDiff
-                        v = 0
-                    end
-
-                    # lookup new state expected bellman value
-                    bellmanVal = BellmanVals[stage + 1, yNext + 1, j]
-
-                    # record 
-                    objSim[yIdx] = pNow*(u - v) + bellmanVal
-                end
-
-                # TODO: i think this section doesnt make sense for this setup
-                # this maximization is essentially looking at which future price is best for us...
-                # which is not something we can control... does that mean we should simply do the
-                # expectation below without finding yOptimal?
-
-                # find optimal solution for this future price
-                tempObj[j], optIdxPair = findmax(objSim)
-                yOptimal[j] = yRange[optIdxPair[1]]
+                # record 
+                objSim[yIdx] = pNow*(yIn - yNext) + expBellmanVal
             end
 
-            # Find expected bellman value
-            optObj = sum(tempObj .* TransitionMatrix[i, :, tp])
-
-            # DEBUG:
-            println("$(findmax(abs.(yOptimal.-mean(yOptimal)))[1])")
-
-            # Store results
-            BellmanVals[stage, yNow + 1, i] = optObj
-            yDecision[stage, :, yNow + 1, i] = yOptimal
+            # find and record best decision
+            BellmanVals[stage, yIn + 1, i], optIdxPair = findmax(objSim)
+            yDecision[stage, yIn + 1, i] = yRange[optIdxPair[1]]
         end
     end 
 end
 
-i0 = ceil(Int, numBands/2)
-finalObj = sum(BellmanVals[1, y0 + 1, :] .* TransitionMatrix[i0, :, TP])
-println(finalObj)
+# Run and print policy
 
-yPrev = y0
-println("t=0: y=$y0")
-for i in t
-    # vscodedisplay(BellmanVals[i,:,:], "t=$i")
-    # @show(yDecision[i, 3, yPrev+1, 3])
-    println("t=$i: y=$(yDecision[i, 1, yPrev+1, 1])")
-    yPrev = yDecision[i, 1, yPrev+1, 1]
-    # vscodedisplay(yDecision[i, 3, :, 3], "t=$i")
+# set common random numbers
+Seeds = 1:10
+
+for seedNum in Seeds
+    Random.seed!(seedNum)
+
+    # Define probability distributions
+    dists = Matrix{DiscreteNonParametric}(undef, numBands, TP)
+    for tp in 1:TP
+        for i in 1:numBands
+            # Set values and probabilities for price band and trading period
+            dists[i, tp] = DiscreteNonParametric(1:numBands, TransitionMatrix[i, :, tp])
+        end
+    end
+
+    # Simulate
+    objective = 0
+    i = ceil(Int, numBands/2)  # starting in central band
+    yHistory = [0]  # starting with an empty battery
+    pHistory = [PriceVals[i, TP]]
+    for stage in t
+        yIn = yHistory[stage]
+        
+        # Update trading period
+        tp = ceil(Int, stage/6)
+
+        # fetch and record optimal decision for stage/state
+        yNext = yDecision[stage, yIn + 1, i] 
+        push!(yHistory, yNext)
+        
+        # fetch and record price for stage/state
+        pNow = PriceVals[i, tp]
+        push!(pHistory, pNow)
+
+        # calculate objective
+        objective += pNow*(yIn - yNext)
+
+        # use random distribution to find j, which becomes i for next iteration
+        j = rand(dists[i, tp])
+        i = j
+    end
+
+    # Plot results 
+    # Plot charge on left axis
+    p = plot(t, yHistory[2:end], 
+        ylabel="Battery charge (MWh)", 
+        legend=:topleft, 
+        label="y", 
+        color=:blue,
+        linewidth=2,
+        title="seed=$seedNum")
+
+    # Plot price on right axis
+    plot!(twinx(), t, pHistory[2:end],
+        ylabel="Price (\$/MWh)", 
+        legend=:topright, 
+        label="p", 
+        color=:red,
+        linestyle=:solid,
+        linewidth=2, 
+        xticks=:none) # Hides overlapping x-ticks from the second axis
+
+    display(p)
 end
