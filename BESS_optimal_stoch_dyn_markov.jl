@@ -7,6 +7,7 @@ using Random
 using Distributions
 using Serialization
 using Plots
+include("clean_DEP_data.jl")
 
 #=  Stochastic dynamic method to optimize BESS usage in 5min increments 
     while ignoring gate closure.
@@ -42,17 +43,42 @@ df = vcat([CSV.read(file, DataFrame) for file in csv_files]...)
 # Keep only OTA2201 connection point data
 df = filter(:PointOfConnection => p -> p == "OTA2201", df)
 
+# format datetime
+fmt = dateformat"yyyy-mm-ddTHH:MM:SS.sssz"
+df.PublishDateTime = ZonedDateTime.(String.(df.PublishDateTime),fmt)
+
 # TODO: CHANGE LOGIC TO INCORPORATE THEM instead
 # remove daylight saving trading period 49 and 50
 df = filter(:TradingPeriod => tp -> tp <= 48, df)
+# df = filter(:DollarsPerMegawattHour => p -> p <= 1000, df)
 
 # Keep only date, trading period and price data
-select!(df, [:TradingDate, :TradingPeriod, :DollarsPerMegawattHour])
+select!(df, [:TradingDate, :TradingPeriod, :PublishDateTime, :DollarsPerMegawattHour])
+
+# Clean data
+df_clean = clean_DEP_data(df)
+
+if true
+    count = combine(groupby(df, [:TradingDate, :TradingPeriod]), nrow => :count)   
+    count_clean = combine(groupby(df_clean, [:TradingDate, :TradingPeriod]), nrow => :count)   
+end
 
 # TODO: Need to make sure that all rows are sorted by time... 
 # PublishDateTime not a good way to do it, as they are sometimes all the same (see first file)
 
 println("Finished tidying data.")
+
+# # EXPLORE DATA
+if false
+    h = histogram(df.DollarsPerMegawattHour)
+    display(h)
+
+    arr = [0.01,0.05,0.1,0.5,1,5,10,50,100,250,500,1000,5000,10000]
+    for (i,p) in enumerate(arr)
+        c = nrow(filter(:DollarsPerMegawattHour => pi -> pi <= p, df))
+        println("$(round(Int,100*c/nrow(df)))% of prices <= $p \$/MWh")
+    end
+end
 
 # Define price bands
 # For band i: lb = bounds[i], ub = bounds[i+1]
@@ -154,6 +180,7 @@ BellmanVals[end,:,:] .= 0  # (termination condition)
 
 # Create matrices to store the optimal y(t) for each stage, y(t-1) and p
 yDecision = fill(-1, T, E+1, numBands)  # first numBands is pNext, second is stage var pNow
+uvDecision = copy(yDecision)
 
 for stage in reverse(t)
     tp = ceil(Int, stage/6)
@@ -173,7 +200,7 @@ for stage in reverse(t)
 
             for (yIdx, yNext) in enumerate(yRange)  # y(t+1)
                 # calculate expected bellman value (here-and-now over j)
-                expBellmanVal = sum(BellmanVals[stage + 1, yNext + 1, :] .* TransitionMatrix[i, :, tp])  # This is NaN
+                expBellmanVal = sum(BellmanVals[stage + 1, yNext + 1, :] .* TransitionMatrix[i, :, tp])
 
                 # record 
                 objSim[yIdx] = pNow*(yIn - yNext) + expBellmanVal
@@ -182,32 +209,202 @@ for stage in reverse(t)
             # find and record best decision
             BellmanVals[stage, yIn + 1, i], optIdxPair = findmax(objSim)
             yDecision[stage, yIn + 1, i] = yRange[optIdxPair[1]]
+            uvDecision[stage, yIn + 1, i] = yIn - yRange[optIdxPair[1]]
         end
     end 
 end
 
-# Run and print policy
+i0 = find_band(110.0, PriceBounds[:,TP])
+finalObj = sum(TransitionMatrix[i0, :, TP].*BellmanVals[1, y0 + 1, :])
+println("expected=$(round(Int, finalObj))")
 
-# set common random numbers
-Seeds = 1:10
 
-for seedNum in Seeds
-    Random.seed!(seedNum)
+# Simulate 1/07/2026
+pActual = [110, 105, 104, 101,  82,  82, 104, 104, 104, 104, 104, 104,
+           106, 104, 104, 104, 104, 103, 104, 104, 104, 103, 103, 103,
+           103, 103, 103, 103, 100, 100, 102, 102, 101, 102, 101, 101,
+           100, 101, 100, 101, 100, 100, 100, 100, 100, 100, 100, 100,
+           100, 100, 103, 103, 103, 103, 100, 104, 104, 104, 106, 106,
+            83, 100, 103, 103, 108, 109,  83,  84, 101, 105, 117, 129,
+            83,  86, 109, 132, 133, 135, 111, 132, 136, 137, 140, 145,
+            95, 130, 130, 147, 149, 151, 145, 160, 175, 190, 190, 157,
+           200, 151, 149, 149, 139, 130, 149, 149, 149, 131, 113, 113,
+           149, 113, 113, 113, 113, 103, 149, 111,  92,  92, 109, 111,
+           110,  92,  91,  89,  89,  89,  90,  90,  89,  89,  88,  88,
+            90,  90,  90,  89,  89,  87,  77,  80,  77,  81,  84,  74,
+            86,  87,  87,  85,  78,  78,  80,  80,  80,  79,  79,  78,
+            82,  82,  82,  81,  81,  79,  82,  81,  68,  68,  68,  24,
+            67,  59,  59,  58,  58,  58,  45,  45,  45,  45,  35,  34,
+            77,  76,  78,  80,  82,  84,  82,  89,  90,  89,  90,  92,
+            90,  92,  92,  92,  95, 108,  92,  94,  98, 100, 110, 110,
+            92,  92,  94,  97, 108, 110,  95,  98,  99,  99,  98, 104,
+           105, 100, 149, 100, 109, 140, 151, 152, 105, 141, 104, 105,
+           151, 109, 151, 105,  99,  98, 103,  96,  96,  95,  95,  94,
+           113,  94,  93,  91,  91,  90,  95,  95,  95,  92,  92,  91,
+            92, 119, 119, 112,  94,  92, 123, 111,  94,  91,  91,  90,
+            94,  92,  90,  88,  88,  87, 109,  93,  89,  87,  87,  85,
+            93, 109,  93,  85,  84,  84,  86,  92,  85,  84,  84,  83]
 
-    # Define probability distributions
-    dists = Matrix{DiscreteNonParametric}(undef, numBands, TP)
-    for tp in 1:TP
-        for i in 1:numBands
-            # Set values and probabilities for price band and trading period
-            dists[i, tp] = DiscreteNonParametric(1:numBands, TransitionMatrix[i, :, tp])
-        end
-    end
+iActual = []
+for (t, p) in enumerate(pActual)
+    push!(iActual, find_band(Float64(p), PriceBounds[:,ceil(Int, t/6)]))
+end
 
-    # Simulate
+caseObjective = 0
+i = find_band(110.0, PriceBounds[:,TP])  # starting band
+yHistory = [0]  # starting with an empty battery
+pHistory = [PriceVals[i, TP]]
+for stage in t
+    yIn = yHistory[stage]
+    
+    # Update trading period
+    tp = ceil(Int, stage/6)
+
+    # fetch and record optimal decision for stage/state
+    yNext = yDecision[stage, yIn + 1, i] 
+    push!(yHistory, yNext)
+    
+    # fetch and record price for stage/state
+    pNow = PriceVals[i, tp]
+    push!(pHistory, pNow)
+
+    # calculate objective
+    caseObjective += pActual[stage]*(yIn - yNext)
+
+    # use random distribution to find j, which becomes i for next iteration
+    j = iActual[stage]
+    i = j
+end
+
+# Plot results 
+ticks = 0:0.5:24
+labels = [mod(x, 1) == 0 ? string(Int(x)) : "" for x in ticks]
+
+# Plot storage on left axis
+p = plot(t/12, yHistory[2:end], 
+    xlabel="time of day (HH)",
+    ylabel="Battery charge (MWh)", 
+    legend=:topleft, 
+    label="y", 
+    color=:blue,
+    linewidth=2,
+    xticks=(ticks, labels))
+
+# Plot price on right axis
+plot!(twinx(), t/12, pActual,
+    ylabel="Price (\$/MWh)", 
+    legend=:topright, 
+    label="p", 
+    color=:red,
+    linestyle=:solid,
+    linewidth=2, 
+    xticks=:none) # Hides overlapping x-ticks from the second axis
+
+display(p)
+
+println("1Jul=$caseObjective")
+
+
+# # # MASS SIMULATION
+
+# # Run and print policy
+
+# # set common random numbers
+# Seeds = 1:10000
+
+# # format x axis plot
+# ticks = 0:0.5:24
+# labels = [mod(x, 1) == 0 ? string(Int(x)) : "" for x in ticks]
+
+# simObjectives = []
+# for seedNum in Seeds
+#     Random.seed!(seedNum)
+
+#     # Define probability distributions
+#     dists = Matrix{DiscreteNonParametric}(undef, numBands, TP)
+#     for tp in 1:TP
+#         for i in 1:numBands
+#             # Set values and probabilities for price band and trading period
+#             dists[i, tp] = DiscreteNonParametric(1:numBands, TransitionMatrix[i, :, tp])
+#         end
+#     end
+
+#     # Simulate
+#     objective = 0
+#     i = ceil(Int, numBands/2)  # starting in central band
+#     yHistory = [0]  # starting with an empty battery
+#     pHistory = [PriceVals[i, TP]]
+#     for stage in t
+#         yIn = yHistory[stage]
+        
+#         # Update trading period
+#         tp = ceil(Int, stage/6)
+
+#         # fetch and record optimal decision for stage/state
+#         yNext = yDecision[stage, yIn + 1, i] 
+#         push!(yHistory, yNext)
+        
+#         # fetch and record price for stage/state
+#         pNow = PriceVals[i, tp]
+#         push!(pHistory, pNow)
+
+#         # calculate objective
+#         objective += pNow*(yIn - yNext)
+
+#         # use random distribution to find j, which becomes i for next iteration
+#         j = rand(dists[i, tp])
+#         i = j
+#     end
+    
+#     push!(simObjectives, objective)
+
+#     # # Plot results 
+#     # # Plot storage on left axis
+#     # p = plot(t/12, yHistory[2:end], 
+#     #     xlabel="time of day (HH)",
+#     #     ylabel="Battery charge (MWh)", 
+#     #     legend=:topleft, 
+#     #     label="y", 
+#     #     color=:blue,
+#     #     linewidth=2,
+#     #     xticks=(ticks, labels),
+#     #     title="seed=$seedNum")
+
+#     # # Plot price on right axis
+#     # plot!(twinx(), t/12, pHistory[2:end],
+#     #     ylabel="Price (\$/MWh)", 
+#     #     legend=:topright, 
+#     #     label="p", 
+#     #     color=:red,
+#     #     linestyle=:solid,
+#     #     linewidth=2, 
+#     #     xticks=:none) # Hides overlapping x-ticks from the second axis
+
+#     # display(p)
+# end
+
+# println("sim=$(mean(simObjectives))")
+
+
+# # MASS SIMULATION (AGAINST REAL DATA)
+
+# get dates which have exactly 288 datapoints
+valid_dates = combine(groupby(df, :TradingDate), nrow => :count)
+valid_dates = Set(valid_dates.TradingDate[valid_dates.count .== 288])
+df_valid = filter(row -> row.TradingDate in valid_dates, df)
+# ---
+
+histObjective = []
+for day in unique(df_valid.TradingDate)
+    # get day data
+    df_day = filter(:TradingDate => d -> d == day, df_valid)
+
+    
+    pHistory = df_day.DollarsPerMegawattHour
+    
     objective = 0
     i = ceil(Int, numBands/2)  # starting in central band
     yHistory = [0]  # starting with an empty battery
-    pHistory = [PriceVals[i, TP]]
     for stage in t
         yIn = yHistory[stage]
         
@@ -219,36 +416,17 @@ for seedNum in Seeds
         push!(yHistory, yNext)
         
         # fetch and record price for stage/state
-        pNow = PriceVals[i, tp]
-        push!(pHistory, pNow)
+        pNow = pHistory[stage]
 
         # calculate objective
         objective += pNow*(yIn - yNext)
 
         # use random distribution to find j, which becomes i for next iteration
-        j = rand(dists[i, tp])
+        j = find_band(pNow, PriceBounds[:,tp])
         i = j
     end
-
-    # Plot results 
-    # Plot charge on left axis
-    p = plot(t, yHistory[2:end], 
-        ylabel="Battery charge (MWh)", 
-        legend=:topleft, 
-        label="y", 
-        color=:blue,
-        linewidth=2,
-        title="seed=$seedNum")
-
-    # Plot price on right axis
-    plot!(twinx(), t, pHistory[2:end],
-        ylabel="Price (\$/MWh)", 
-        legend=:topright, 
-        label="p", 
-        color=:red,
-        linestyle=:solid,
-        linewidth=2, 
-        xticks=:none) # Hides overlapping x-ticks from the second axis
-
-    display(p)
+    
+    push!(histObjective, objective)
 end
+
+println("sim=$(mean(histObjective))")
