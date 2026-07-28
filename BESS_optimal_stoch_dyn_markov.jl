@@ -56,7 +56,13 @@ df = filter(:TradingPeriod => tp -> tp <= 48, df)
 select!(df, [:TradingDate, :TradingPeriod, :PublishDateTime, :DollarsPerMegawattHour])
 
 # Clean data
-df_clean = clean_DEP_data(df)
+df_clean2 = clean_DEP_data(df)
+# df = clean_DEP_data(df)
+
+if false
+    CSV.write("raw_data.csv", df)
+    CSV.write("clean_data.csv", df_clean)
+end
 
 if true
     count = combine(groupby(df, [:TradingDate, :TradingPeriod]), nrow => :count)   
@@ -65,6 +71,35 @@ end
 
 # TODO: Need to make sure that all rows are sorted by time... 
 # PublishDateTime not a good way to do it, as they are sometimes all the same (see first file)
+
+if false
+    p = plot(df.PublishDateTime, df.DollarsPerMegawattHour, 
+        label="original", 
+        color=:blue,
+        linewidth=0.5,
+        m = :diamond, 
+        markersize = 6, 
+        markercolor = :blue
+    )
+
+    # Plot price on right axis
+    plot!(df_clean.PublishDateTime, df_clean.DollarsPerMegawattHour,
+        xlabel="time",
+        ylabel="Price (\$/MWh)", 
+        legend=:topright, 
+        label="clean", 
+        color=:red,
+        linestyle=:solid,
+        linewidth=0.5,
+        m = :diamond, 
+        markersize = 3, 
+        markercolor = :red,
+        xlim=(DateTime(df.PublishDateTime[259]),DateTime(df.PublishDateTime[265])),
+        ylim=(0,0.1)
+    ) # Hides overlapping x-ticks from the second axis
+
+    display(p)
+end
 
 println("Finished tidying data.")
 
