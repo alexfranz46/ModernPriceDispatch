@@ -102,33 +102,33 @@ end
 
 
 function remove_mislabelled_data(g)
-            # Check all entries are from the same trading period
-        date = g.TradingDate[1]
-        tp = g.TradingPeriod[1]
-        h = (tp - 1) ÷ 2
-        tz = timezone(g.PublishDateTime[1])
+    # Check all entries are from the same trading period
+    date = g.TradingDate[1]
+    tp = g.TradingPeriod[1]
+    h = (tp - 1) ÷ 2
+    tz = timezone(g.PublishDateTime[1])
 
-        # Compute expected minute range
-        if isodd(tp)
-            expectedMins = (0, 25)
-        else
-            expectedMins = (30, 55)
-        end
+    # Compute expected minute range
+    if isodd(tp)
+        expectedMins = (0, 25)
+    else
+        expectedMins = (30, 55)
+    end
 
-        # Build lower and upper expected timestamps
-        lb = ZonedDateTime(year(date), month(date), day(date), h, expectedMins[1], 0, tz)
-        ub = ZonedDateTime(year(date), month(date), day(date), h, expectedMins[2], 0, tz)
+    # Build lower and upper expected timestamps
+    lb = ZonedDateTime(year(date), month(date), day(date), h, expectedMins[1], 0, tz)
+    ub = ZonedDateTime(year(date), month(date), day(date), h, expectedMins[2], 0, tz)
 
-        # Tolerance band (±2.5 minutes)
-        tol = Second(150)
+    # Tolerance band (±4 minutes 59 seconds)
+    tol = Second(299)
 
-        # Keep timestamps within [lb - tol, ub + tol]
-        keep = map(g.PublishDateTime) do zdt
-            (lb - tol) <= zdt <= (ub + tol)
-        end
+    # Keep timestamps within [lb - tol, ub + tol]
+    keep = map(g.PublishDateTime) do zdt
+        (lb - tol) <= zdt <= (ub + tol)
+    end
 
-        # Filter the group
-        return g[keep, :]
+    # Filter the group
+    return g[keep, :]
 end
 
 
@@ -137,9 +137,12 @@ function clean_DEP_data(df)
     result = DataFrame()
 
     # handle daylight savings (total tp !=48)
-    # TODO
+    DaylightSavings = [Date(2023, 4, 2), Date(2023, 9, 24), Date(2024, 4, 7), Date(2024, 9, 29), Date(2025, 4, 6), Date(2025, 9, 28), Date(2026, 4, 5)]
 
     for g in groupby(df, [:TradingDate, :TradingPeriod])
+        if g.TradingDate[1] in DaylightSavings
+            continue  # ignore daylight savings data
+        end
 
         # identify and remove data published at the wrong time
         g = remove_mislabelled_data(g)
@@ -147,7 +150,9 @@ function clean_DEP_data(df)
         # guarantee every day has exactly 288 observations
         n = nrow(g)
 
-        if n == 6
+        if n == 0
+            continue  # removed data
+        elseif n == 6
             append!(result, g)
         elseif n >= 7
             while nrow(g) != 6
@@ -162,6 +167,3 @@ function clean_DEP_data(df)
 
     return result
 end
-
-df= deserialize("df.jls")
-clean_DEP_data(df)
