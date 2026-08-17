@@ -307,12 +307,38 @@ for stage in reverse(t)
     end 
 end
 
+if false
+    Bellman_file_path = joinpath("Serials", "BellmanVals.jls")
+    uvDecision_file_path = joinpath("Serials", "uvDecision.jls")
+    serialize(Bellman_file_path, BellmanVals)
+    serialize(uvDecision_file_path, uvDecision)
+end
+
+if false
+    plt = heatmap(uvDecision[1,:,:], title="t=1", 
+        legend=false, widen=false,
+        aspect_ratio=:equal, clim=(-10.0, 10.0),
+        xlim=(1,numBands), ylim=(0,T),
+        xticks=1:10
+    )
+
+    # Loop through all 48 matrices and build the animation frames
+    anim = @animate for i in 1:T
+        heatmap!(plt, uvDecision[i,:,:], title="t=$i", aspect_ratio=:equal)
+    end
+
+    # Save the animation to a file
+    gif(anim, "uv.gif", fps=5)
+end
+
 i0 = find_band(110.0, PriceBounds[:,TP])
 finalObj = sum(TransitionMatrix[i0, :, TP].*BellmanVals[1, y0 + 1, :])
 println("expected=$(round(Int, finalObj))")
 
 # investigate ADR monotonicity
 if true
+    p = plot(xlim=(1,10), xticks=1:10, ylim=(-10,10), legend=false)
+    
     monotonousADR = Matrix{Bool}(undef, T, E+1)
     nonMonotonousCount = Matrix{Int}(undef, T, E+1)
     nonMonotonousBands = Matrix{Vector{Int}}(undef, T, E+1)
@@ -333,8 +359,15 @@ if true
                     
             nonMonotonousCount[t,e] = count
             nonMonotonousBands[t,e] = idxs
+
+            if count != 0
+                # add non monot to plot
+                plot!(p, 1:10, slice)
+            end
         end
     end
+
+    display(p)
 
     hm = heatmap(Int.(monotonousADR), c = [:red, :green], 
         legend = false, 
@@ -394,7 +427,7 @@ for stage in t
     tp = ceil(Int, stage/6)
 
     # fetch and record optimal decision for stage/state
-    yNext = yDecision[stage, yIn + 1, i] 
+    yNext = yIn - uvDecisionOG[stage, yIn + 1, i] 
     push!(yHistory, yNext)
     
     # fetch and record price for stage/state
