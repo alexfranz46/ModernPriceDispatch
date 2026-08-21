@@ -171,6 +171,13 @@ else
         end
     end
 
+    if true
+        # plot decile price bounds over time
+        boundTimes = repeat(0.0:0.5:24.0, inner=2)[2:end-1]
+        boundplot = repeat(PriceBounds[2:end-1,:], inner=(1,2))
+        plot(boundTimes, boundplot', legend=false)
+    end 
+
     # Define transition Matrix (i -> j for each t)
     TransitionMatrix = zeros(Float64, numBands, numBands, TP)
     #                                 band i,   band j,   t
@@ -427,7 +434,7 @@ for stage in t
     tp = ceil(Int, stage/6)
 
     # fetch and record optimal decision for stage/state
-    yNext = yIn - uvDecisionOG[stage, yIn + 1, i] 
+    yNext = yIn - uvDecision[stage, yIn + 1, i] 
     push!(yHistory, yNext)
     
     # fetch and record price for stage/state
@@ -579,7 +586,7 @@ for day in unique(df_valid.TradingDate)
         tp = ceil(Int, stage/6)
 
         # fetch and record optimal decision for stage/state
-        yNext = yDecision[stage, yIn + 1, i] 
+        yNext = yIn - uvDecision2[stage, yIn + 1, i] 
         push!(yHistory, yNext)
         
         # fetch and record price for stage/state
@@ -598,7 +605,8 @@ end
 
 println("historic=$(round(Int, mean(histObjective)))")
 xlimMatch = xlims(h)
-h = histogram(histObjective, legend=:none, xlims=xlimMatch)  # same xlims as previous
+bins = -30000:10000:250000
+h = histogram(histObjective, legend=:none, xlims=xlimMatch, bins=bins, ylims=(0,420))  # same xlims as previous
 display(h)
 println("historic observations outside histogram xlims: 
     $(sum(x -> x < (xlimMatch[1]), histObjective)) below; 

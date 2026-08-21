@@ -140,8 +140,7 @@ def main():
         f"\nFound {len(files)} files.\n"
     )
 
-    # TEST RUN: Only keep first 3 files
-    # files = files[:3]
+    # files = files[:3] # UNCOMMENT FOR TEST RUN: Only keep first 3 files
 
     for i, file in enumerate(files, start=1):
 
