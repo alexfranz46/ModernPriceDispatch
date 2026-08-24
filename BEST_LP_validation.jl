@@ -70,5 +70,7 @@ function noGC_LP(p)
     #     println("$i")
     # end
 
-    return objective_value(model)
+    yReturn = [yi for yi in value(y)]
+
+    return objective_value(model), yReturn
 end

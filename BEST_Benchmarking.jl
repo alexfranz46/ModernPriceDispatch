@@ -16,6 +16,17 @@ include("BEST_LP_validation.jl")
 # get BEST policies
 uvDecision = deserialize(joinpath("Serials", "uvDecision.jls"))
 uvDecisionIron = deserialize(joinpath("Serials", "uvDecisionIron.jls"))
+PriceBounds = deserialize(joinpath("Serials", "PriceBounds.jls"))
+
+""" Returns the band a price falls into
+"""
+function find_band(p::Float64, bounds::Vector{Float64})
+    for (i, ub) in enumerate(bounds)
+        if p <= ub
+            return i - 1
+        end
+    end
+end
 
 # get and clean test data (50 days)
 csv_files = String[]
@@ -51,6 +62,7 @@ valid_dates = Set(valid_dates.TradingDate[valid_dates.count .== 288])
 df_valid = filter(row -> row.TradingDate in valid_dates, df_test)
 
 days = unique(df_valid.TradingDate)
+focusDays = [Date("2026-07-23"), Date("2026-08-09"), Date("2026-07-27")]
 
 # # Solve noGC, BEST, ironBEST for each day
 noGC = Float64[]  # 50x1 array of revenues
@@ -64,7 +76,9 @@ for day in days
     pHistory = df_day.DollarsPerMegawattHour
 
     if length(pHistory) == 288
-        push!(noGC, noGC_LP(pHistory))
+        objectiveNoGC, yHistoryNoGC = noGC_LP(pHistory)
+        yHistoryNoGC = [0 ; yHistoryNoGC]
+        push!(noGC, objectiveNoGC)
     else
         error("wrong number of prices for $(Day.TradingDate)")
     end
@@ -74,10 +88,10 @@ for day in days
 
     objective = 0
     objectiveIron = 0
-    i = ceil(Int, numBands/2)  # starting in central band
+    i = 5  # starting in central band
     yHistory = [0]  # starting with an empty battery
     yHistoryIron = [0]
-    for stage in t
+    for stage in 1:288
         yIn = yHistory[stage]
         yInIron = yHistoryIron[stage]
         
@@ -104,6 +118,52 @@ for day in days
     
     push!(BEST, objective)
     push!(ironBEST, objectiveIron)
+
+    if day in focusDays
+        # Plot results 
+        ticks = 0:0.5:24
+        labels = [mod(x, 1) == 0 ? string(Int(x)) : "" for x in ticks]
+
+        # Plot storage on left axis
+        p = plot(0:1/12:24, yHistoryNoGC, 
+            xlabel="time of day (HH)",
+            ylabel="Battery charge (MWh)", 
+            title="$day",
+            legend=:topright,
+            legendfontsize=5, 
+            label="Perf. f-sight", 
+            color=:silver,
+            linewidth=1,
+            xticks=(ticks, labels)
+        )
+
+        plot!(0:1/12:24, yHistory,
+            label="BEST", 
+            color=:blue,
+            linewidth=1
+        )
+
+        plot!(0:1/12:24, yHistoryIron,
+            label="monoBEST", 
+            color=:hotpink,
+            linewidth=1
+        )
+
+        # Plot price on right axis
+        plot!(twinx(), 1/12:1/12:24, pHistory,
+            ylabel="Price (\$/MWh)", 
+            # ylims=(0, 349),
+            legend=false, 
+            color=:red,
+            linestyle=:solid,
+            linewidth=1, 
+            xticks=:none,
+            ytickfontcolor=:red,
+            y_guidefontcolor=:red
+        ) 
+
+        display(p)
+    end
 end
 
 RevenuePerMethod=[noGC BEST ironBEST]
@@ -173,9 +233,16 @@ ymin1 = -r/(1-r) * ymax1
 ylims!(p1, (ymin1, ymax1))
 ylims!(p2, (ymin2, ymax2))
 
-plot(
+pjoin = plot(
     p1, p2,
     layout=@layout([a{0.1w} b{0.9w}]),
     size=(1200,800)
 )
 
+display(pjoin)
+
+# for (idx, day) in enumerate(days)
+#     if day in focusDays
+#         println(RevenuePerMethod[idx, :])
+#     end
+# end
