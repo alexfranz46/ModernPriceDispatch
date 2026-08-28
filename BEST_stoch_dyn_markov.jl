@@ -13,6 +13,7 @@ include("clean_DEP_data.jl")
     while ignoring gate closure.
 =#
 
+mkpath("Plots")
 
 """ Returns the band a price falls into
 """
@@ -22,6 +23,30 @@ function find_band(p::Float64, bounds::Vector{Float64})
             return i - 1
         end
     end
+end
+
+function format_staircase(uv, b)
+    # TODO: DOES NOT WORK YET
+    lastVal = uv[1]
+    
+    priceStair = [0.0]
+    uvStair = [lastVal]
+
+    for i in 2:10
+        val = uv[i]
+        if val != lastVal
+            push!(priceStair, b[i])
+            push!(priceStair, b[i])
+            push!(uvStair, lastVal)
+            push!(uvStair, val)
+            lastVal = val
+        end
+    end
+
+    push!(priceStair, 1.2*b[end-1])
+    push!(uvStair, uv[end])
+
+    return priceStair, uvStair
 end
 
 # set fineness of temporal mesh
@@ -343,51 +368,167 @@ finalObj = sum(TransitionMatrix[i0, :, TP].*BellmanVals[1, y0 + 1, :])
 println("expected=$(round(Int, finalObj))")
 
 # investigate ADR monotonicity
-if true
-    p = plot(xlim=(1,10), xticks=1:10, ylim=(-10,10), legend=false)
+if false    
+    monotonicADR = Matrix{Bool}(undef, T, E+1)
+    nonMonotonicCount = Matrix{Int}(undef, T, E+1)
+    nonMonotonicBands = Matrix{Vector{Int}}(undef, T, E+1)
+    uniqueCount = Matrix{Int}(undef, T, E+1)
     
-    monotonousADR = Matrix{Bool}(undef, T, E+1)
-    nonMonotonousCount = Matrix{Int}(undef, T, E+1)
-    nonMonotonousBands = Matrix{Vector{Int}}(undef, T, E+1)
     for t in 1:T
         for e in 1:E+1
-            monotonousADR[t, e] = issorted(uvDecision[t, e, :])
-            slice = uvDecision[t, e, :]
+            slice = vec(uvDecision[t, e, :])
             
-            # Count how many adjacent pairs violate the sorted rule
+            monotonicADR[t, e] = issorted(slice)
+            
             count = 0
-            idxs = []
-            for i in 1:(length(slice) - 1)
+            idxs = Int[]
+            for i in 1:(length(slice)-1)
                 if slice[i] > slice[i+1]
                     count += 1
                     push!(idxs, i+1)
                 end
             end
-                    
-            nonMonotonousCount[t,e] = count
-            nonMonotonousBands[t,e] = idxs
-
-            if count != 0
-                # add non monot to plot
-                plot!(p, 1:10, slice)
-            end
+            
+            nonMonotonicCount[t,e] = count
+            nonMonotonicBands[t,e] = idxs
         end
     end
 
-    display(p)
 
-    hm = heatmap(Int.(monotonousADR), c = [:red, :green], 
+    # TODO: Make these plots dimensions more square...
+    # nonMonot(278,16)
+    stageIdx = 278 
+    yInIdx = 16
+    plotPrice, plotUV = format_staircase(uvDecision[stageIdx,yInIdx,:], PriceBounds[:, ceil(Int, stageIdx/6)])
+    p = plot(plotUV, plotPrice, 
+        framestyle = :origin, 
+        xlabel="   Bids (MW)   |   Offers (MW)", 
+        ylabel="Price (\$/MWh)", 
+        legend=false, 
+        lc=:red,
+        size=(600,300))
+    # display(p)
+    savefig(p, "plots/StaircaseRed.pdf")
+
+    # yesMonot(255,66)
+    stageIdx = 255 
+    yInIdx = 66
+    plotPrice, plotUV = format_staircase(uvDecision[stageIdx,yInIdx,:], PriceBounds[:, ceil(Int, stageIdx/6)])
+    p = plot(
+        plotUV, 
+        plotPrice, 
+        framestyle = :origin, 
+        xlabel="   Bids (MW)   |   Offers (MW)", 
+        ylabel="Price (\$/MWh)", 
+        legend=false, 
+        lc=:green,
+        size=(600,300))
+    # display(p)
+    savefig(p, "plots/StaircaseGreen.pdf")
+
+    hm = heatmap(Int.(monotonicADR'), c = [:red, :green], 
         legend = false, 
         aspect_ratio = :equal, 
-        xlabel="Battery Charge", 
-        ylabel="5-min period", 
-        xlim=(0,E), 
-        ylim=(1,T)
+        xlabel="5-min period", 
+        ylabel="State of Charge (MWh)", 
+        xlim=(1,T), 
+        ylim=(1,E+1),
+        size=(528,448)
     )
 
-    display(hm)
+    # display(hm)
+    savefig(hm, "plots/MonotHeatmap.pdf")
 end
 
+if false
+    stageIdx = 255
+    yInIdxs = [11, 66, 91, 191]
+    plotPrice = []
+    plotUV = []
+
+    for yInIdx in yInIdxs
+        tempP, tempUV = format_staircase(uvDecision[stageIdx,yInIdx,:], PriceBounds[:, ceil(Int, stageIdx/6)])
+        push!(plotPrice, tempP)
+        push!(plotUV, tempUV)
+    end
+
+    p = plot(plotUV, plotPrice, 
+        framestyle = :origin, 
+        xlabel="   Bids (MW)   |   Offers (MW)", 
+        xlims=(-10,10),
+        ylabel="Price (\$/MWh)", 
+        label=["80%" "50%" "25%" "  5%"],
+        size=(500,400)
+    )
+    
+    # display(p)
+    savefig(p, "plots/TradeSoC.pdf")
+
+    Random.seed!(1)
+    samples = 100
+    priceSamples = 400*rand(samples,13)
+    storage = similar(priceSamples)
+
+    for sample in 1:samples
+        yIn = 120
+        storage[sample, 1] = yIn
+        for time in 1:12
+            price = priceSamples[sample, time]
+            if yIn >= 144  # 80%
+                if price >= 320
+                    yIn += 10
+                else
+                    yIn -= 10
+                end
+            elseif yIn >= 72  # 50%
+                if price >= 320
+                    yIn += 10
+                elseif price >= 220
+                    yIn += 5
+                elseif price >= 160
+                    yIn -= 5
+                else
+                    yIn -= 10
+                end
+            elseif yIn >= 36  # 25%
+                if price >= 160
+                    yIn += 10
+                elseif price >= 130
+                    # Idle
+                else
+                    yIn -= 10
+                end
+            else           #  5%
+                if price >= 100
+                    yIn += 10
+                elseif price >= 40
+                    # Idle
+                else
+                    yIn -= 10
+                end
+            end
+
+            storage[sample, time+1] = yIn
+        end
+    end
+
+    xtick_vals = 1:13
+    xtick_labels = ["   Gate Closure"; "00:05"; ["00:$(v)" for v in 10:5:55]; "Dispatch"]
+    ytick_vals = 0.2:0.1:.7
+    ytick_labels = ["$(Int(v * 100))%" for v in ytick_vals]
+
+    p=plot(xtick_vals, storage'./240,
+        xticks = (xtick_vals, xtick_labels),
+        yticks = (ytick_vals, ytick_labels),
+        ylabel="State of Charge",
+        legend = false,
+        xrotation=45,
+        size=(500,400)
+    )
+
+    savefig(p, "plots/UncertSoC.pdf")
+
+end
 
 
 # Simulate 1/07/2026
@@ -586,7 +727,7 @@ for day in unique(df_valid.TradingDate)
         tp = ceil(Int, stage/6)
 
         # fetch and record optimal decision for stage/state
-        yNext = yIn - uvDecision2[stage, yIn + 1, i] 
+        yNext = yIn - uvDecision[stage, yIn + 1, i] 
         push!(yHistory, yNext)
         
         # fetch and record price for stage/state

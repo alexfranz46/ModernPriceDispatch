@@ -13,6 +13,8 @@ using StatsPlots
 include("clean_DEP_data.jl")
 include("BEST_LP_validation.jl")
 
+mkpath("Plots")
+
 # get BEST policies
 uvDecision = deserialize(joinpath("Serials", "uvDecision.jls"))
 uvDecisionIron = deserialize(joinpath("Serials", "uvDecisionIron.jls"))
@@ -63,6 +65,22 @@ df_valid = filter(row -> row.TradingDate in valid_dates, df_test)
 
 days = unique(df_valid.TradingDate)
 focusDays = [Date("2026-07-23"), Date("2026-08-09"), Date("2026-07-27")]
+dc = 0
+
+if false
+    df = deserialize(joinpath("Serials", "df.jls"))
+    df = filter(:TradingPeriod => tp -> tp <= 48, df)
+
+    select!(df, [:TradingDate, :TradingPeriod, :PublishDateTime, :DollarsPerMegawattHour])
+
+    df_clean = clean_DEP_data(df)
+    valid_dates = combine(groupby(df_clean, :TradingDate), nrow => :count)
+    valid_dates = Set(valid_dates.TradingDate[valid_dates.count .== 288])
+    df_valid = filter(row -> row.TradingDate in valid_dates, df_clean)
+
+    days = unique(df_valid.TradingDate)
+    focusDays = ["2024-08-06"]
+end
 
 # # Solve noGC, BEST, ironBEST for each day
 noGC = Float64[]  # 50x1 array of revenues
@@ -120,6 +138,8 @@ for day in days
     push!(ironBEST, objectiveIron)
 
     if day in focusDays
+        dc += 1
+
         # Plot results 
         ticks = 0:0.5:24
         labels = [mod(x, 1) == 0 ? string(Int(x)) : "" for x in ticks]
@@ -127,7 +147,7 @@ for day in days
         # Plot storage on left axis
         p = plot(0:1/12:24, yHistoryNoGC, 
             xlabel="time of day (HH)",
-            ylabel="Battery charge (MWh)", 
+            ylabel="State of charge (MWh)", 
             title="$day",
             legend=:topright,
             legendfontsize=5, 
@@ -159,10 +179,18 @@ for day in days
             linewidth=1, 
             xticks=:none,
             ytickfontcolor=:red,
-            y_guidefontcolor=:red
+            y_guidefontcolor=:red,
+            yformatter = :plain
         ) 
 
-        display(p)
+        # display(p)
+        savefig(p, "plots/ResultsDay$dc.pdf")
+
+        if dc == 2
+            ylims!(p, (0, 349)) 
+            # display(p)
+            savefig(p, "plots/ResultsDay$(dc)Scaled.pdf")
+        end
     end
 end
 
@@ -193,7 +221,7 @@ p1 = groupedbar(
     rev_top,
     label=labels,
     legend=false,
-    ylabel="Daily profit from arbitrage (000's of \$)",
+    ylabel="Daily revenue/loss from arbitrage (000's of \$)",
     xrotation=90,
     color = [:silver :blue :hotpink],
     bottom_margin = 10Plots.mm,
@@ -209,7 +237,7 @@ p2 = groupedbar(
     label=labels,
     ymirror=true,
     legend=:topright,
-    ylabel="Daily profit from arbitrage (000's of \$)",
+    ylabel="Daily revenue/loss from arbitrage (000's of \$)",
     xrotation=90,
     annotations=[
         ((0.012,0.17), text("same day", 9)),
@@ -240,6 +268,7 @@ pjoin = plot(
 )
 
 display(pjoin)
+savefig(pjoin, "plots/ResultsMain.pdf")
 
 # for (idx, day) in enumerate(days)
 #     if day in focusDays

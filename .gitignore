@@ -1,3 +1,4 @@
 # Files to ignore for commits
 .venv/
 DispatchEnergyPrices/
+Plots/
