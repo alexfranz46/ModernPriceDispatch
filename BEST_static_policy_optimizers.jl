@@ -49,7 +49,7 @@ function _BEST_legacy(case::BESTCase)
                 # Find and keep best decision
                 BellmanVals[stage, yIn + 1, i], optIdxPair = findmax(objSim)
                 storageDecisions[stage, yIn + 1, i] = yRange[optIdxPair[1]]
-                tradeDecisions[stage, yIn + 1, i] = yIn - yRange[optIdxPair[1]]
+                tradeDecisions[stage, yIn + 1, i] = yRange[optIdxPair[1]] - yIn
             end
         end 
     end
@@ -106,11 +106,11 @@ function _BEST_monotonic(case)
                 # Find and keep best decision
                 BellmanVals[stage, yIn + 1, i], optIdxPair = findmax(objSim)
                 storageDecisions[stage, yIn + 1, i] = yRange[optIdxPair[1]]
-                tradeDecisions[stage, yIn + 1, i] = yIn - yRange[optIdxPair[1]]
+                tradeDecisions[stage, yIn + 1, i] = yRange[optIdxPair[1]] - yIn
             end
 
             # Check saved solution is monotonic
-            if !issorted(tradeDecisions[stage, yIn + 1, :])
+            if !issorted(tradeDecisions[stage, yIn + 1, :], rev=true)
 
                 # Calclate belman values
                 expBellmanVals = fill(Inf, bess.storageCapacityMWh+1, PBANDS)
@@ -148,7 +148,7 @@ function _BEST_monotonic(case)
                 # update bellmans and decision
                 BellmanVals[stage, yIn + 1, :] = value.(objBand)
                 storageDecisions[stage, yIn + 1, :] = round.(Int, value.(y))
-                tradeDecisions[stage, yIn + 1, :] = yIn .- round.(Int, value.(y))
+                tradeDecisions[stage, yIn + 1, :] = round.(Int, value.(y)) .- yIn
             end
         end 
     end

@@ -16,6 +16,15 @@ end
 # end
 
 
+""" Default estimator function for GC method
+"""
+function conservative(case, y::Int, U::Matrix{Int})
+    if y <= case.bess.storageCapacityMWh
+        return y + sum(minimum(U, dims=2))
+    else
+        return y + sum(maximum(U, dims=2))
+    end
+end
 
 
 ####
@@ -43,6 +52,7 @@ end
 struct PriceProcess
     PriceVals::Matrix{Float64}
     PriceBounds::Matrix{Float64}
+    TransitionTally::Array{Int}
     TransitionMatrix::Array{Float64,3}
 end
 
@@ -70,7 +80,9 @@ mutable struct BESTCase
     data::Union{Nothing,NodeData}
     bess::Union{Nothing,BESS}
     price::Union{Nothing,PriceProcess}
-    policy::Union{Nothing,StaticPolicy}
+
+    # Sub-structure lists
+    policies::Dict{Symbol,StaticPolicy}
 
     # Initialize with Constructor
     function BESTCase(TP::Int, PERPERIOD::Int, PBANDS::Int)
@@ -86,7 +98,9 @@ mutable struct BESTCase
             nothing,
             nothing,
             nothing,
-            nothing,
+
+            # Sub-structure lists
+            Dict{Symbol,StaticPolicy}(),
         )
     end
 end
@@ -246,9 +260,13 @@ function set_price!(case::BESTCase, price_model)
     return nothing
 end
 
-function solve_policy!(case::BESTCase, policy_optimizer)
+function solve_policy!(case::BESTCase, optimizers)
     
-    case.policy = policy_optimizer(case)
+    # case.policy = policy_optimizer(case)
+
+    for policy_optimizer in optimizers
+        case.policies[Symbol(policy_optimizer)] = policy_optimizer(case)
+    end
 
     return nothing
 end

@@ -8,6 +8,7 @@ function first_order_markov_price_process(case::BESTCase)
     # Initialize retruns
     PriceVals = Matrix{Float64}(undef, PBANDS, TP)
     PriceBounds = Matrix{Float64}(undef, PBANDS+1, TP)
+    TransitionTally = zeros(Float64, PBANDS, PBANDS, TP)
     TransitionMatrix = zeros(Float64, PBANDS, PBANDS, TP)
 
     # Unbounded lowest and highest bounds
@@ -63,7 +64,7 @@ function first_order_markov_price_process(case::BESTCase)
         j = find_band(rowJ.DollarsPerMegawattHour, PriceBounds[:, tpJ])
 
         # Update tally
-        TransitionMatrix[i, j, tpI] += 1
+        TransitionTally[i, j, tpI] += 1
 
         # Update for next transition
         rowI = rowJ
@@ -71,18 +72,10 @@ function first_order_markov_price_process(case::BESTCase)
 
     # Convert tallies to probabilities
     for tp in 1:TP
-        for i in 1:PBANDS
-            
-            # calculate the total sum of rows
-            totalI = sum(TransitionMatrix[i, :, tp])
-            # TODO: account for totalI==0?
-
-            # transform count into probabilties
-            TransitionMatrix[i, :, tp] ./= totalI
-        end
+        TransitionMatrix[:, :, tp] ./= vec(sum(TransitionTally[:, :, tp], dims=2))
     end
 
-    return PriceProcess(PriceVals, PriceBounds, TransitionMatrix)
+    return PriceProcess(PriceVals, PriceBounds, TransitionTally, TransitionMatrix)
 end
 
 
