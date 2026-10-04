@@ -75,19 +75,20 @@ set_price!(case, first_order_markov_price_process)
 set_BESS!(case, storageCapacityMWh, dischargeCapacityMW, chargeCapacityMW)
 
 # Optimize
-# solve_policy!(case, _BEST_legacy)
-solve_policy!(case, [_BEST_legacy])
+solve_policy!(case, _BEST_legacy)
+solve_policy!(case, _BEST_monotonic)
+# solve_policy!(case, [_BEST_legacy, _BEST_monotonic])
 
 # Plots
-# historic_performance(case)
+historic_performance(case)
 # historic_performance_1hr(case)  # TODO WIP
 
-bellman_visual_check_grid(case, "_BEST_legacy", 1, 2, 3)
-bellman_visual_check_grid(case, "_BEST_legacy", 1, 3, 2)
-bellman_visual_check_grid(case, "_BEST_legacy", 2, 1, 3)
-bellman_visual_check_grid(case, "_BEST_legacy", 3, 1, 2)
-bellman_visual_check_grid(case, "_BEST_legacy", 2, 3, 1)
-bellman_visual_check_grid(case, "_BEST_legacy", 3, 2, 1)
+# bellman_visual_check_grid(case, "_BEST_legacy", 1, 2, 3)
+# bellman_visual_check_grid(case, "_BEST_legacy", 1, 3, 2)
+# bellman_visual_check_grid(case, "_BEST_legacy", 2, 1, 3)
+# bellman_visual_check_grid(case, "_BEST_legacy", 3, 1, 2)
+# bellman_visual_check_grid(case, "_BEST_legacy", 2, 3, 1)
+# bellman_visual_check_grid(case, "_BEST_legacy", 3, 2, 1)
 
 # bellman_visual_check_gif(case, "_BEST_legacy", 2, 3, 1)
 
@@ -95,14 +96,14 @@ bellman_visual_check_grid(case, "_BEST_legacy", 3, 2, 1)
 
 
 
-# WORKSPACE
+# # WORKSPACE
 
 
-tallies = sum(case.price.TransitionTally, dims=2)[:,1,:]
-plot(tallies)
+# tallies = sum(case.price.TransitionTally, dims=2)[:,1,:]
+# plot(tallies)
 
-least_common_band = [a[1] for a in argmin(tallies, dims=1)]
-# check how far from average/outliers...?
+# least_common_band = [a[1] for a in argmin(tallies, dims=1)]
+# # check how far from average/outliers...?
 
 
 

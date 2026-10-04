@@ -72,7 +72,7 @@ function first_order_markov_price_process(case::BESTCase)
 
     # Convert tallies to probabilities
     for tp in 1:TP
-        TransitionMatrix[:, :, tp] ./= vec(sum(TransitionTally[:, :, tp], dims=2))
+        TransitionMatrix[:, :, tp] = TransitionTally[:, :, tp] ./ vec(sum(TransitionTally[:, :, tp], dims=2))
     end
 
     return PriceProcess(PriceVals, PriceBounds, TransitionTally, TransitionMatrix)

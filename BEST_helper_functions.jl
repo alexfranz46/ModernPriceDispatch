@@ -260,13 +260,14 @@ function set_price!(case::BESTCase, price_model)
     return nothing
 end
 
-function solve_policy!(case::BESTCase, optimizers)
-    
-    # case.policy = policy_optimizer(case)
+# function solve_policy!(case::BESTCase, optimizers)
+function solve_policy!(case::BESTCase, policy_optimizer)
 
-    for policy_optimizer in optimizers
-        case.policies[Symbol(policy_optimizer)] = policy_optimizer(case)
-    end
+    case.policies[Symbol(policy_optimizer)] = policy_optimizer(case)
+
+    # for policy_optimizer in optimizers
+    #     case.policies[Symbol(policy_optimizer)] = policy_optimizer(case)
+    # end
 
     return nothing
 end
