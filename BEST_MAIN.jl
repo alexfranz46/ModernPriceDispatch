@@ -62,7 +62,7 @@ chargeCapacityMW = 120  # BESS charge power capacity (MW)
 # # # # # # # # # # #
 
 # Defire problem case
-case = BESTCase(TP, PERPERIOD, PBANDS)
+case = BESTCase(TP, PERPERIOD, GCCOUNT, PBANDS)
 
 # Handle data
 # set_data!(case, node, clearNodeData)
@@ -80,15 +80,15 @@ solve_policy!(case, _BEST_monotonic)
 # solve_policy!(case, [_BEST_legacy, _BEST_monotonic])
 
 # Plots
-historic_performance(case)
-# historic_performance_1hr(case)  # TODO WIP
+historic_performance_noGC(case)
+historic_performance_1hGC(case)  # TODO WIP
 
-# bellman_visual_check_grid(case, "_BEST_legacy", 1, 2, 3)
-# bellman_visual_check_grid(case, "_BEST_legacy", 1, 3, 2)
-# bellman_visual_check_grid(case, "_BEST_legacy", 2, 1, 3)
-# bellman_visual_check_grid(case, "_BEST_legacy", 3, 1, 2)
-# bellman_visual_check_grid(case, "_BEST_legacy", 2, 3, 1)
-# bellman_visual_check_grid(case, "_BEST_legacy", 3, 2, 1)
+bellman_visual_check_grid(case, "_BEST_monotonic", 1, 2, 3)
+bellman_visual_check_grid(case, "_BEST_monotonic", 1, 3, 2)
+bellman_visual_check_grid(case, "_BEST_monotonic", 2, 1, 3)
+bellman_visual_check_grid(case, "_BEST_monotonic", 3, 1, 2)
+bellman_visual_check_grid(case, "_BEST_monotonic", 2, 3, 1)
+bellman_visual_check_grid(case, "_BEST_monotonic", 3, 2, 1)
 
 # bellman_visual_check_gif(case, "_BEST_legacy", 2, 3, 1)
 
@@ -97,6 +97,22 @@ historic_performance(case)
 
 
 # # WORKSPACE
+
+
+
+# # PRICE TRANSITIONS OVER MULTIPLE PERIODS
+# T = case.price.TransitionMatrix[:,:,36]
+# S = case.price.TransitionMatrix[:,:,36]
+
+# hm=heatmap(S, clim=(0.0,1.0))
+# display(hm)
+# for i in 1:12
+#     S = S*T
+#     hm=heatmap(S, clim=(0.0,1.0))
+#     display(hm)
+# end
+
+
 
 
 # tallies = sum(case.price.TransitionTally, dims=2)[:,1,:]
@@ -229,6 +245,11 @@ historic_performance(case)
 
 
 
+
+# for t = 1:case.T
+#     c=contourf(1:PBANDS,1:case.bess.storageCapacityMWh+1,V[t,:,:],clims=(0,1.5*10^5),title="t=$t")
+#     display(c)
+# end
 
 
 # p3d=surface(1:case.bess.storageCapacityMWh+1,1:case.T+1,V[:,:,1], camera = (210, 30))

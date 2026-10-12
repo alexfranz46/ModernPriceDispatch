@@ -1,16 +1,30 @@
 #TODO Reformat in same style as everything else...
 
-function historic_performance(case::BESTCase; y0=0, plim=500)
+""" General function, use GCCOUNT, strict_feasibility::Bool
+"""
+# function historic_performance(case::BESTCase; y0=0, plim=500)
+    
+# end
+
+function historic_performance_noGC(case::BESTCase; y0=0, plim=500)
 
     policies = case.policies
     data = case.data.testCaseData
     bess = case.bess
     PriceBounds = case.price.PriceBounds
 
+    # Initialize colours for different solver graphs
     colors = cgrad(:Blues, length(policies) + 1, categorical=true)
 
+    # Initialize dataframe to print daily revenue results
+    df_revenue = select(unique(case.data.testCaseData, :TradingDate), :TradingDate)
+    Revenues = Dict(
+        policy => Vector{Float64}(undef, nrow(df_revenue))
+        for policy in keys(case.policies)
+    )
+
     # create individual visual for each day
-    for day in groupby(data, :TradingDate)
+    for (dayIdx, day) in enumerate(groupby(data, :TradingDate))
 
         # Initialize plot
         p = plot(xlabel="time of day (HH)", ylabel="Battery charge (MWh)", legend=:topleft)
@@ -21,7 +35,7 @@ function historic_performance(case::BESTCase; y0=0, plim=500)
         labels = [mod(x, 1) == 0 ? string(Int(x)) : "" for x in ticks]
 
         # Plot each all solvers on same canvas
-        for (idx, (solver, policy))  in enumerate(case.policies)
+        for (solverIdx, (solver, policy))  in enumerate(case.policies)
 
             # Set initial conditions
             dailyRevenue = 0
@@ -44,15 +58,18 @@ function historic_performance(case::BESTCase; y0=0, plim=500)
 
             # Plot storage on left axis
             plot!(p, vals, yHistory,
-                title="$(day.TradingDate[1]); revenue=\$$(round(dailyRevenue, digits=2))",
+                title="$(day.TradingDate[1])",
                 ylims=(-0.03*bess.storageCapacityMWh,1.03*bess.storageCapacityMWh),
                 label=String(solver),
-                color=colors[idx+1],
+                color=colors[solverIdx+1],
                 linewidth=2,
                 ytickfontcolor=:blue,
                 y_guidefontcolor=:blue,
                 xticks=(ticks, labels)
             )
+
+            # save revenue
+            Revenues[Symbol(solver)][dayIdx] = dailyRevenue
         end
 
         # plot price on right axis
@@ -78,10 +95,14 @@ function historic_performance(case::BESTCase; y0=0, plim=500)
 
         display(p)
     end
+
+    # Show revenue table
+    insertcols!(df_revenue, Revenues...)
+    display(df_revenue) 
 end
 
 
-function historic_performance_1hr(case::BESTCase; f=conservative, y0=zeros(Int, 12), U=zeros(Int, 12 - 1, 10), plim=500)
+function OLDhistoric_performance_1hr(case::BESTCase; f=conservative, y0=zeros(Int, 12), U=zeros(Int, 12 - 1, 10), plim=500)
 
     policies = case.policies
     data = case.data.testCaseData
@@ -172,6 +193,113 @@ function historic_performance_1hr(case::BESTCase; f=conservative, y0=zeros(Int, 
         display(p)
     end
 end
+
+
+function historic_performance_1hGC(case::BESTCase; f=conservative, y0=0, plim=500)
+
+    policies = case.policies
+    data = case.data.testCaseData
+    bess = case.bess
+    PriceBounds = case.price.PriceBounds
+
+    # Initialize colours for different solver graphs
+    colors = cgrad(:Blues, length(policies) + 1, categorical=true)
+
+    # Initialize dataframe to print daily revenue results
+    df_revenue = select(unique(case.data.testCaseData, :TradingDate), :TradingDate)
+    Revenues = Dict(
+        policy => Vector{Float64}(undef, nrow(df_revenue))
+        for policy in keys(case.policies)
+    )
+
+    # create individual visual for each day
+    for (dayIdx, day) in enumerate(groupby(data, :TradingDate))
+
+        # Initialize plot
+        p = plot(xlabel="time of day (HH)", ylabel="Battery charge (MWh)", legend=:topleft)
+
+        # format x-axis
+        vals = range(0, 24, length=nrow(day)+1)
+        ticks = 0:0.5:24
+        labels = [mod(x, 1) == 0 ? string(Int(x)) : "" for x in ticks]
+
+        # Plot each all solvers on same canvas
+        for (solverIdx, (solver, policy))  in enumerate(case.policies)
+
+            # Set initial conditions
+            dailyRevenue = 0
+            yHistory = [y0]
+            yEstim = [f(case, y0)]
+
+            # Follow decisions stage by stage
+            for (stage, interval) in enumerate(eachrow(day))
+
+                # Variables
+                yIn = f(case, yHistory[stage])
+                push!(yEstim, yIn)
+                i = find_band(interval.DollarsPerMegawattHour, PriceBounds[:,interval.TradingPeriod])
+
+                # Check feasibility
+                if !(0<=yIn<=bess.storageCapacityMWh)
+                    error("Infeasible incoming storage yIn($stage) = $yIn for $solver")
+                end
+                # yIn = feasible_storage(case, yIn) #TODO CHANGE TO THIS!
+
+                # Update storage
+                yNext = yHistory[stage] + policy.tradeDecisions[stage, yIn+1, i]
+                push!(yHistory, yNext)
+
+                # Upddate revenue
+                dailyRevenue += interval.DollarsPerMegawattHour*(yIn - yNext)
+            end
+
+            # Plot storage on left axis
+            plot!(p, vals, yHistory,
+                title="$(day.TradingDate[1])",
+                ylims=(-0.03*bess.storageCapacityMWh,1.03*bess.storageCapacityMWh),
+                label=String(solver),
+                color=colors[solverIdx+1],
+                linewidth=2,
+                ytickfontcolor=:blue,
+                y_guidefontcolor=:blue,
+                xticks=(ticks, labels)
+            )
+
+            # save revenue
+            Revenues[Symbol(solver)][dayIdx] = dailyRevenue
+        end
+
+        # plot price on right axis
+        p2 = twinx(p)
+        plot!(p2, vals[1:end-1], day.DollarsPerMegawattHour,
+        ylabel="Price (\$/MWh)", 
+        legend=false, 
+        color=:red,
+        linestyle=:solid,
+        linewidth=2, 
+        ytickfontcolor=:red,
+        y_guidefontcolor=:red,
+        xticks=:none) # Hides overlapping x-ticks from the second axis
+
+        # format right y-axis
+        pmax = maximum(day.DollarsPerMegawattHour)
+        if plim < pmax
+            ylims!(p2, (-0.03*pmax, 1.03*pmax))
+            annotate!(p2, [(12, pmax/2, text("ADJUSTED PRICE SCALE"))])
+        else
+            ylims!(p2, (-0.03*plim,1.03*plim))
+        end
+
+        display(p)
+    end
+
+    # Show revenue table
+    insertcols!(df_revenue, Revenues...)
+    display(df_revenue) 
+end
+
+
+
 
 #TODO: performance with simulated data?
 

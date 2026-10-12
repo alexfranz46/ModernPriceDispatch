@@ -9,6 +9,18 @@ function find_band(p::Float64, bounds::Vector{Float64})
 end
 
 
+"""
+"""
+function feasible_storage(case, y; strict_feasibility=false)
+    if (0 <= y <= case.bess.storageCapacityMWh)
+        return y
+    elseif strict_feasibility
+        error("Infeasible storage")
+    else
+        return abs(y - 0) < abs(y - case.bess.storageCapacityMWh) ? 0 : case.bess.storageCapacityMWh
+    end
+end
+
 # """ Checks if a certain variable exists in the serials cache
 # """
 # function serial_path(variable)
@@ -18,14 +30,20 @@ end
 
 """ Default estimator function for GC method
 """
-function conservative(case, y::Int, U::Matrix{Int})
-    if y <= case.bess.storageCapacityMWh
-        return y + sum(minimum(U, dims=2))
+function conservative(case, y::Int)#, U::Matrix{Int})
+    if y <= case.bess.storageCapacityMWh/2
+        return 0#y + sum(minimum(U, dims=2))
     else
-        return y + sum(maximum(U, dims=2))
+        return case.bess.storageCapacityMWh#y + sum(maximum(U, dims=2))
     end
 end
 
+
+""" NEW Default estimator function for GC method
+"""
+function optimistic(case, y::Int, U::Matrix{Int}, pForecast::Vector{Int})
+    return y + sum([U[i,p] for (i,p) in enumerate(pForecast)])
+end
 
 ####
 
@@ -44,6 +62,10 @@ struct BESS
     storageCapacityMWh::Int
     dischargeCapacityInterval::Int
     chargeCapacityInterval::Int
+    #roundTripLosses::Float64
+    #actualMaxCapacity
+    #actualMinCapacity
+    #etc...
 end
 
 
@@ -85,13 +107,14 @@ mutable struct BESTCase
     policies::Dict{Symbol,StaticPolicy}
 
     # Initialize with Constructor
-    function BESTCase(TP::Int, PERPERIOD::Int, PBANDS::Int)
+    function BESTCase(TP::Int, PERPERIOD::Int, GCCOUNT::Int, PBANDS::Int)
         
         new(
             # Principal parameters
             TP,
             PERPERIOD,
             TP*PERPERIOD,
+            GCCOUNT,
             PBANDS,
 
             # Sub-structures
@@ -115,7 +138,7 @@ function StaticPolicy(case::BESTCase)
     storage = case.bess.storageCapacityMWh
     
     StaticPolicy(
-        Array{Float64, 3}(undef, T+1, storage + 1, PBANDS),  # TODO: implement switch-case for termination condition?
+        Array{Float64, 3}(undef, T + 1, storage + 1, PBANDS),  # TODO: implement switch-case for termination condition?
         Array{Int, 3}(undef, T, storage + 1, PBANDS),
         Array{Int, 3}(undef, T, storage + 1, PBANDS),
     )
