@@ -7,6 +7,7 @@ function _BEST_legacy(case::BESTCase)
     
     # Extract relavent inputs
     T = case.T
+    PERPERIOD = case.PERPERIOD
     PBANDS = case.PBANDS
     bess = case.bess
     PriceVals = case.price.PriceVals
@@ -23,7 +24,7 @@ function _BEST_legacy(case::BESTCase)
 
     # Iterative solver
     for stage in reverse(1:T)
-        tp = ceil(Int, stage/6)
+        tp = ceil(Int, stage/PERPERIOD)
 
         for yIn in 0:bess.storageCapacityMWh  # y(t-1)
             # Lower bound for y based on y stage varaible
@@ -58,6 +59,97 @@ function _BEST_legacy(case::BESTCase)
 end
 
 
+""" monotonic method without lp WIP!!
+"""
+function _BEST_temp(case::BESTCase)
+    
+    # Extract relavent inputs
+    T = case.T
+    PERPERIOD = case.PERPERIOD
+    PBANDS = case.PBANDS
+    bess = case.bess
+    PriceVals = case.price.PriceVals
+    TransitionMatrix = case.price.TransitionMatrix
+
+    # Initialize returns
+    sol = StaticPolicy(case)
+    BellmanVals = sol.BellmanVals
+    storageDecisions = sol.storageDecisions
+    tradeDecisions = sol.tradeDecisions
+
+    # Termination condition
+    BellmanVals[end,:,:] .= 0
+
+    # Iterative solver
+    for stage in reverse(1:T)
+        tp = ceil(Int, stage/PERPERIOD)
+
+        V = BellmanVals[stage+1,:,:]
+
+        for yIn in 0:bess.storageCapacityMWh  # y(t-1)
+
+            # feasible bounds of trades
+            u⁻ = max(yIn - bess.storageCapacityMWh, - bess.dischargeCapacityInterval) 
+            u⁺ = min(yIn, bess.chargeCapacityInterval)
+
+            for i in 1:PBANDS  # p(t-1)
+                
+                M = TransitionMatrix[i, :, tp]
+
+
+                uBest = nothing
+                VBest = 0
+
+
+                for uCandidate in 0:1  #TODO: SET!
+
+                    indices = CartesianIndex.(uCandidate, 1:10)
+                    obj = sum(M .* (PriceVals[:,tp].*uCandidate .+ V[indices]) )
+
+                    if obj > VBest
+                       uBest = uCandidate
+                       VBest = obj 
+                    end
+
+                end
+
+            end
+
+            # for u in setU =[]
+            # obj = sum(TransitionMatrix[pNow] .* (PriceVals[pNow].*u + BellmanVals[stage+1, y.+u, pNow?]))
+
+            # # Lower bound for y based on y stage varaible
+            # y⁻ = max(0, yIn - bess.dischargeCapacityInterval) 
+            # y⁺ = min(bess.storageCapacityMWh, yIn + bess.chargeCapacityInterval)
+            # yRange = y⁻:y⁺
+
+            # for i in 1:PBANDS  # p(t)
+            #     # Price stage variable
+            #     pNow = PriceVals[i, tp]
+                
+            #     # Initialize solution
+            #     objSim = fill(Inf, y⁺-y⁻+1)
+
+            #     for (yIdx, yNext) in enumerate(yRange)  # y(t)
+            #         # Calculate expected bellman value (here-and-now over j)
+            #         expBellmanVal = sum(BellmanVals[stage + 1, yNext + 1, :] .* TransitionMatrix[i, :, tp])
+
+            #         # Record objective 
+            #         objSim[yIdx] = pNow*(yIn - yNext) + expBellmanVal
+            #     end
+
+            #     # Find and keep best decision
+            #     BellmanVals[stage, yIn + 1, i], optIdxPair = findmax(objSim)
+            #     storageDecisions[stage, yIn + 1, i] = yRange[optIdxPair[1]]
+            #     tradeDecisions[stage, yIn + 1, i] = yRange[optIdxPair[1]] - yIn
+            # end
+        end 
+    end
+
+    return sol
+end
+
+
 """ Optimized BEST algorithm which guarantees monotoic solutions. 
 """
 function _BEST_monotonic(case)
@@ -80,7 +172,7 @@ function _BEST_monotonic(case)
 
     # Iterative solver
     for stage in reverse(1:T)
-        tp = ceil(Int, stage/6)
+        tp = ceil(Int, stage/PERPERIOD)
 
         for yIn in 0:bess.storageCapacityMWh  # y(t-1)
             # Lower bound for y based on y stage varaible

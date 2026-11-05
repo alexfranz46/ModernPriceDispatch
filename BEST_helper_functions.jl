@@ -12,12 +12,18 @@ end
 """
 """
 function feasible_storage(case, y; strict_feasibility=false)
-    if (0 <= y <= case.bess.storageCapacityMWh)
+    E = case.bess.storageCapacityMWh
+    if (0 <= y <= E)
         return y
     elseif strict_feasibility
-        error("Infeasible storage")
+        error("Infeasible storage.")
     else
-        return abs(y - 0) < abs(y - case.bess.storageCapacityMWh) ? 0 : case.bess.storageCapacityMWh
+        @warn "Adjusted infeasible storage."
+        if y > E
+            return E
+        elseif y < 0
+            return 0
+        end
     end
 end
 
@@ -30,7 +36,7 @@ end
 
 """ Default estimator function for GC method
 """
-function conservative(case, y::Int)#, U::Matrix{Int})
+function conservative(case, y::Int, U::Matrix{Int})
     if y <= case.bess.storageCapacityMWh/2
         return 0#y + sum(minimum(U, dims=2))
     else
@@ -96,6 +102,7 @@ mutable struct BESTCase
     TP::Int
     PERPERIOD::Int
     T::Int
+    GCCOUNT::Int
     PBANDS::Int
 
     # Sub-structures

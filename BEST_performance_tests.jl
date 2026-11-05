@@ -197,6 +197,8 @@ end
 
 function historic_performance_1hGC(case::BESTCase; f=conservative, y0=0, plim=500)
 
+    GCCOUNT = case.GCCOUNT
+    PBANDS = case.PBANDS
     policies = case.policies
     data = case.data.testCaseData
     bess = case.bess
@@ -227,34 +229,57 @@ function historic_performance_1hGC(case::BESTCase; f=conservative, y0=0, plim=50
         for (solverIdx, (solver, policy))  in enumerate(case.policies)
 
             # Set initial conditions
+            yIn = y0
             dailyRevenue = 0
-            yHistory = [y0]
-            yEstim = [f(case, y0)]
+            yHistory = fill(y0, GCCOUNT)  # all 'yesterday' storage levels are y0
+            UHistory = policy.tradeDecisions[1:GCCOUNT, y0+1, :]  # 'yesterday' optimal decisions
+            yEstim = [] 
 
             # Follow decisions stage by stage
             for (stage, interval) in enumerate(eachrow(day))
+                println(stage)
+                # Observe real-time dispatch
 
-                # Variables
-                yIn = f(case, yHistory[stage])
-                push!(yEstim, yIn)
+                # observe market price
                 i = find_band(interval.DollarsPerMegawattHour, PriceBounds[:,interval.TradingPeriod])
 
-                # Check feasibility
-                if !(0<=yIn<=bess.storageCapacityMWh)
-                    error("Infeasible incoming storage yIn($stage) = $yIn for $solver")
+                # dispatch
+                yNext = yIn + UHistory[stage+GCCOUNT-1, i]
+                if stage == 192
+                    @show(yNext)
+                    @show(yHistory)
+                    @show(yEstim)
+                    @show(UHistory[stage+GCCOUNT-1, i])
                 end
-                # yIn = feasible_storage(case, yIn) #TODO CHANGE TO THIS!
-
-                # Update storage
-                yNext = yHistory[stage] + policy.tradeDecisions[stage, yIn+1, i]
+                yNext = feasible_storage(case, yNext, strict_feasibility=true)
                 push!(yHistory, yNext)
 
                 # Upddate revenue
                 dailyRevenue += interval.DollarsPerMegawattHour*(yIn - yNext)
+                yIn = yNext
+
+                # Submit optimal future trade at GC
+
+
+                # Estimate incoming storage
+                yCandidate = f(case, yHistory[stage], UHistory[stage:stage+GCCOUNT-1, :])  # TODO: CANT JUST GRAB y FROM JUST BEFORE! NEEDS TO BE FROM GC!
+                
+                # if stage == 99
+                #     @show(yCandidate)
+                #     @show(yHistory)
+                #     @show(yEstim)
+                #     @show(UHistory[stage:stage+GCCOUNT-1, :])
+                # end
+                yCandidate = feasible_storage(case, yCandidate, strict_feasibility=true)
+                push!(yEstim, yCandidate)
+
+                # submit optimal trade
+                uStar = policy.tradeDecisions[stage, yCandidate+1, :]
+                UHistory = [UHistory; uStar']
             end
 
             # Plot storage on left axis
-            plot!(p, vals, yHistory,
+            plot!(p, vals, yHistory[GCCOUNT:end],
                 title="$(day.TradingDate[1])",
                 ylims=(-0.03*bess.storageCapacityMWh,1.03*bess.storageCapacityMWh),
                 label=String(solver),
