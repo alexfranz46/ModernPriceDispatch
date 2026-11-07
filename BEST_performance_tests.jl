@@ -2,9 +2,161 @@
 
 """ General function, use GCCOUNT, strict_feasibility::Bool
 """
-# function historic_performance(case::BESTCase; y0=0, plim=500)
-    
-# end
+function basic_performance(case::BESTCase; y0=0, plim=500)
+
+    policies = case.policies
+    data = case.data.testCaseData
+    bess = case.bess
+    PriceBounds = case.price.PriceBounds
+
+    # Find data in tp format
+    dataTP = combine(groupby(data, [:TradingDate, :TradingPeriod]), :DollarsPerMegawattHour => mean => :DollarsPerMegawattHour)
+
+    # Initialize colours for different solver graphs
+    colors = cgrad(:Blues, length(policies) + 1, categorical=true)
+
+    # Initialize dataframe to print daily revenue results
+    df_revenue = select(unique(case.data.testCaseData, :TradingDate), :TradingDate)
+    Revenues = Dict(
+        policy => Vector{Float64}(undef, nrow(df_revenue))
+        for policy in keys(case.policies)
+    )
+
+    # create individual visual for each day
+    for (dayIdx, day) in enumerate(groupby(dataTP, :TradingDate))
+
+        # Initialize plot
+        p = plot(xlabel="time of day (HH)", ylabel="Battery charge (MWh)", legend=:topleft)
+
+        # format x-axis
+        vals = range(0, 24, length=nrow(day)+1)
+        ticks = 0:0.5:24
+        labels = [mod(x, 1) == 0 ? string(Int(x)) : "" for x in ticks]
+
+        # Plot each all solvers on same canvas
+        for (solverIdx, (solver, policy))  in enumerate(case.policies)
+
+            # logic for gate closure or not
+            if ndims(policy.BellmanVals) == 3 
+                hasGC = false
+            elseif ndims(policy.BellmanVals) == 4 
+                hasGC = true
+            else
+                error("Unexpected dimensions")
+            end
+
+            # Set initial conditions
+            dailyRevenue = 0
+            yHistory = [y0]
+            i = find_band(first(day.DollarsPerMegawattHour), case.price.PriceBounds[:,case.TP])  # assume price of yesterday TP48 is same as today TP1
+            if hasGC
+                u0 = policy.tradeDecisions[case.TP, y0+1, case.stacks.idleStackIdx, i, :]
+                uIdx = case.stacks.stackToIdx[Tuple(u0)]
+            end
+
+            # Follow decisions stage by stage
+            for (stage, interval) in enumerate(eachrow(day))
+                
+                # Variables
+                yIn = yHistory[end]
+                j = find_band(interval.DollarsPerMegawattHour, case.price.PriceBounds[:,stage])
+
+                # Update storage
+                if hasGC
+
+                    yNext = yIn - case.stacks[uIdx][j]
+                    if yNext < 0 || yNext > case.bess.storageCapacityMWh
+                        error("yNext=$yNext outside range for t=$stage")
+                    end
+                    uNext = policy.tradeDecisions[stage, yIn+1, uIdx, j, :] # TODO: sotrage should be uIn or uNext???!!!
+                    uIdx = case.stacks.stackToIdx[Tuple(uNext)]
+
+                else
+                    yNext = policy.storageDecisions[stage, yIn+1, i, j]
+                end
+                push!(yHistory, yNext)
+
+                # Update revenue
+                dailyRevenue += interval.DollarsPerMegawattHour*(yIn - yNext)
+
+                i = j
+            end
+
+            # Plot storage on left axis
+            plot!(p, vals, yHistory,
+                title="$(day.TradingDate[1])",
+                ylims=(-0.03*bess.storageCapacityMWh,1.03*bess.storageCapacityMWh),
+                label=String(solver),
+                color=colors[solverIdx+1],
+                linewidth=2,
+                ytickfontcolor=:blue,
+                y_guidefontcolor=:blue,
+                xticks=(ticks, labels)
+            )
+
+            # save revenue
+            Revenues[Symbol(solver)][dayIdx] = dailyRevenue*200/case.bess.storageCapacityMWh
+            #                                              ^ this adjust revenue to 200MWh battery... TODO: THIS SHOULD NOT BE HARDCODED!
+
+        end
+
+        # plot price on right axis
+        p2 = twinx(p)
+        plot!(p2, vals[1:end-1], day.DollarsPerMegawattHour,
+        ylabel="Price (\$/MWh)", 
+        legend=false, 
+        color=:red,
+        linestyle=:solid,
+        linewidth=2, 
+        ytickfontcolor=:red,
+        y_guidefontcolor=:red,
+        xticks=:none) # Hides overlapping x-ticks from the second axis
+
+        # format right y-axis
+        pmax = maximum(day.DollarsPerMegawattHour)
+        if plim < pmax
+            ylims!(p2, (-0.03*pmax, 1.03*pmax))
+            annotate!(p2, [(12, pmax/2, text("ADJUSTED PRICE SCALE"))])
+        else
+            ylims!(p2, (-0.03*plim,1.03*plim))
+        end
+
+        display(p)
+    end
+
+    # Show revenue table
+    insertcols!(df_revenue, Revenues...)
+    show(df_revenue, allrows=true)
+    println("")
+    println("GC has higher revenue for $(count(df_revenue._BEST_temp .< df_revenue._BEST_gc)) of the days in the set")
+end
+
+
+function policy_breakdown(case::BESTCase)
+
+    C = case.bess.chargeCapacityInterval
+    D = case.bess.dischargeCapacityInterval
+    E = case.bess.storageCapacityMWh
+
+    for (name, policy) in case.policies
+        u = policy.tradeDecisions
+        y = policy.storageDecisions
+
+        println("POLICY = $name")
+
+        println("all unique: $(length(u))")
+        println("capacity C: $(count(x->x==-C,u))")
+        println("capacity D: $(count(x->x==D,u))")
+        # println("capacity E: $(count(x->x==E,y[:,E,:,:])) THIS MIGHT BE WRONG")
+        # println("capacity 0: $(count(x->x==0,y[:,2,:,:])) THIS MIGHT BE WRONG")
+        println("choose idle: $(count(x->x==0,u))")
+        # println("choose <C: $(count(x->-C<x<0,u[:,1:E-1,:,:])) THIS MIGHT BE WRONG")
+        # println("choose <D: $(count(x->0<x<D,u[:,3:end,:,:])) THIS MIGHT BE WRONG")
+
+
+        #count(x->x==-Inf, V) <- the amount of wasted slots (infeasible and always skipped) #35%ish
+    end
+end
 
 function historic_performance_noGC(case::BESTCase; y0=0, plim=500)
 

@@ -52,8 +52,8 @@ function get_clean_test_case_data(TP::Int, PERPERIOD::Int, rawData::DataFrame, i
     intervalsByTP = combine(groupby(rawData, [:TradingDate, :TradingPeriod]), nrow => :Count)
 
     # Find days with exactly T data points
-    cleanData = Set(first(g.TradingDate) for g in groupby(intervalsByTP, :TradingDate) if all(g.Count .== PERPERIOD))
-    partialCleanData = Set(intervalsByDay.TradingDate[intervalsByDay.Count .== TP*PERPERIOD])
+    cleanData = Set(first(g.TradingDate) for g in groupby(intervalsByTP, :TradingDate) if all(g.Count .== 6))
+    partialCleanData = Set(intervalsByDay.TradingDate[intervalsByDay.Count .== 288])
     
     if !isempty(cleanData) && !include_partial_clean_data
         return filter(row -> row.TradingDate in cleanData, rawData)

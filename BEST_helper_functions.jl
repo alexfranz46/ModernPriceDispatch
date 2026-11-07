@@ -85,12 +85,64 @@ struct PriceProcess
 end
 
 
+struct ValidStacks{N}
+    stacks::Vector{NTuple{N,Int}}
+    stackToIdx::Dict{NTuple{N,Int},Int}
+    idleStack::NTuple{N,Int}
+    idleStackIdx::Int
+    feasibleIdxs::Dict{Tuple{Int,Int}, Vector{Int}}
+end
+
+Base.getindex(vs::ValidStacks, i::Int) = vs.stacks[i]  # case.stacks.stacks becomes case.stacks
+Base.length(vs::ValidStacks) = length(vs.stacks)   # case.stacks.stacks becomes case.stacks
+Base.iterate(vs::ValidStacks) = iterate(vs.stacks)  # enambles loops, enumerate etc.
+Base.iterate(vs::ValidStacks, state) = iterate(vs.stacks, state)  # enambles loops, enumerate etc.
+
+# DEPRECATED VERSION
+# """ Stores static policy for optimal BESS operation
+# """
+# mutable struct StaticPolicy
+#     BellmanVals::Array{Float64,3}
+#     storageDecisions::Array{Int,3}
+#     tradeDecisions::Array{Int,3}
+# end
+
+
 """ Stores static policy for optimal BESS operation
 """
-mutable struct StaticPolicy
-    BellmanVals::Array{Float64,3}
-    storageDecisions::Array{Int,3}
-    tradeDecisions::Array{Int,3}
+mutable struct StaticPolicy{NV, ND}
+    BellmanVals::Array{Float64,NV}
+    storageDecisions::Array{Int,ND}
+    tradeDecisions::Array{Int,ND}
+end
+
+
+""" Iterates the stack to next valid
+"""
+function next_valid_stack!(u, maxval)
+    
+    # begin with rightmost trade 
+    pos = length(u)
+
+    # shift to rightmost trade which can be iterated
+    while pos >= 1 && u[pos] == maxval
+        pos -= 1
+    end
+
+    # complete
+    if pos == 0
+        return false
+    end
+
+    # iterate to next valid stack
+    u[pos] += 1
+
+    # conserve monotonicity
+    for j in pos+1:length(u)
+        u[j] = u[pos]
+    end
+
+    return true
 end
 
 
@@ -109,6 +161,7 @@ mutable struct BESTCase
     data::Union{Nothing,NodeData}
     bess::Union{Nothing,BESS}
     price::Union{Nothing,PriceProcess}
+    stacks::Union{Nothing,ValidStacks}
 
     # Sub-structure lists
     policies::Dict{Symbol,StaticPolicy}
@@ -128,6 +181,7 @@ mutable struct BESTCase
             nothing,
             nothing,
             nothing,
+            nothing,
 
             # Sub-structure lists
             Dict{Symbol,StaticPolicy}(),
@@ -136,18 +190,112 @@ mutable struct BESTCase
 end
 
 
+# DEPRECATED VERSION
+# """ Outer constructor for StaticPolicy
+# """
+# function StaticPolicy(case::BESTCase, includeGC::Bool)
+    
+#     T = case.T
+#     PBANDS = case.PBANDS
+#     storage = case.bess.storageCapacityMWh
+
+#     StaticPolicy(
+#         Array{Float64, 3}(undef, T + 1, storage + 1, PBANDS),  # TODO: implement switch-case for termination condition?
+#         Array{Int, N}(undef, T, storage + 1, PBANDS),
+#         Array{Int, N}(undef, T, storage + 1, PBANDS),
+#     )
+# end
+
+
+function ValidStacks(stackLength::Int, minval::Int, maxval::Int)
+
+    # first state
+    u = fill(minval, stackLength)
+
+    # initialize
+    stacks = Vector{NTuple{stackLength,Int}}()
+
+    # find all stacks
+    while true
+
+        push!(stacks, Tuple(u))
+
+        next_valid_stack!(u, maxval) || break
+
+    end
+
+    # Define dictonary which retirns idx for stack
+    stackToIdx = Dict(Tuple(stack) => idx for (idx, stack) in enumerate(stacks))
+
+    # define stack of all trades = 0
+    idleStack = stacks[stackToIdx[Tuple(fill(0, stackLength))]]
+    idleStackIdx = stackToIdx[idleStack]
+
+    # collect all indices feasible for all pair of bounds
+    feasibleIdxs = Dict{Tuple{Int,Int}, Vector{Int}}()
+    for lower in minval:maxval
+        for upper in lower:maxval
+
+            # initialize
+            idxs = Int[]
+
+            for (idx, stack) in enumerate(stacks)
+
+                # add idx to list
+                if lower <= stack[1] && stack[end] <= upper
+                    push!(idxs, idx)
+                end
+            end
+
+            feasibleIdxs[(lower, upper)] = idxs
+
+        end
+    end
+
+    ValidStacks{PBANDS}(stacks, stackToIdx, idleStack, idleStackIdx, feasibleIdxs)
+
+    # uCandidate = stateSpace.stacks[idx]
+    # idx = stateSpace.stackToIdx[Tuple(uCandidate)]
+
+end
+
+
+
 """ Outer constructor for StaticPolicy
 """
-function StaticPolicy(case::BESTCase)
-        
+function StaticPolicy(case::BESTCase, includeGC::Bool)
+    
     T = case.T
     PBANDS = case.PBANDS
     storage = case.bess.storageCapacityMWh
+    charge = case.bess.chargeCapacityInterval
+    discharge = case.bess.dischargeCapacityInterval
+    tradeOptions = charge + discharge  
+    # number of trades is charge+discharge+1, but binomial equations is actually:
+    #                                           (tradeOptions+PBANDS-1)C(PBANDS)
     
-    StaticPolicy(
-        Array{Float64, 3}(undef, T + 1, storage + 1, PBANDS),  # TODO: implement switch-case for termination condition?
-        Array{Int, 3}(undef, T, storage + 1, PBANDS),
-        Array{Int, 3}(undef, T, storage + 1, PBANDS),
+    if includeGC
+        NV = 4
+        bellDims = (T + 1, storage + 1, binomial(tradeOptions+PBANDS, PBANDS), PBANDS)
+        ND = 5
+        decDims = (T, storage + 1, binomial(tradeOptions+PBANDS, PBANDS), PBANDS, PBANDS)
+    else
+        NV = 3
+        bellDims = (T + 1, storage + 1, PBANDS)
+        ND = 4
+        decDims = (T, storage + 1, PBANDS, PBANDS)
+    end
+
+    # StaticPolicy{NV, ND}(
+    #     Array{Float64, 3 + Int(includeGC)}(undef, bellDims...),  # TODO: implement switch-case for termination condition?
+    #     Array{Int, 4 + Int(includeGC)}(undef, decDims...),
+    #     Array{Int, 4 + Int(includeGC)}(undef, decDims...),
+    # )
+
+    StaticPolicy{NV, ND}(
+        fill(-Inf, bellDims...),  # TODO: implement switch-case for termination condition?
+        zeros(Int, decDims...),
+        zeros(Int, decDims...),
     )
 end
 
@@ -241,6 +389,13 @@ function set_BESS!(case::BESTCase, storageCapacityMWh::Int, dischargeCapacityMW:
         chargeCapacityInterval,
     )
     
+    # Also initilaize trade stacks
+    case.stacks = ValidStacks(
+        case.PBANDS,
+        -dischargeCapacityInterval,
+        chargeCapacityInterval,
+    )
+
     return nothing
 end
 

@@ -48,13 +48,13 @@ clearNodeData = false
 # # # # # # # # # # #
 
 TP = 48  # number of trading periods in a day
-PERPERIOD = 6  # number of trading intervals per trading period (i.e.: 6x 5-min in a 30-min tp)
+PERPERIOD = 1  # number of trading intervals per trading period (i.e.: 6x 5-min in a 30-min tp)
 GCCOUNT = 0  # number of trading intervals between Gate Closure and real time (i.e.: 12x 5-min in a 1-hr GC)
 PBANDS = 10  # number of price bands
 node = "OTA2201"  # Prices from this GIP/GXP
-storageCapacityMWh = 240  # BESS Energy Capacity (MWh)
-dischargeCapacityMW = 120  # BESS discharge power capacity (MW)
-chargeCapacityMW = 120  # BESS charge power capacity (MW)
+storageCapacityMWh = 8  # BESS Energy Capacity (MWh)
+dischargeCapacityMW = 4  # BESS discharge power capacity (MW)
+chargeCapacityMW = 4  # BESS charge power capacity (MW)
 
 
 # # # # # # # # # # #
@@ -65,8 +65,8 @@ chargeCapacityMW = 120  # BESS charge power capacity (MW)
 case = BESTCase(TP, PERPERIOD, GCCOUNT, PBANDS)
 
 # Handle data
-# set_data!(case, node, clearNodeData)
-set_data!(case, node, clearNodeData, include_partial_clean_data=false)
+set_data!(case, node, clearNodeData)
+# set_data!(case, node, clearNodeData, include_partial_clean_data=false)
 
 # Define price process
 set_price!(case, first_order_markov_price_process)
@@ -75,25 +75,116 @@ set_price!(case, first_order_markov_price_process)
 set_BESS!(case, storageCapacityMWh, dischargeCapacityMW, chargeCapacityMW)
 
 # Optimize
-solve_policy!(case, _BEST_legacy)
-solve_policy!(case, _BEST_monotonic)
+@time solve_policy!(case, _BEST_temp)
+@time solve_policy!(case, _BEST_gc)
+# solve_policy!(case, _BEST_legacy)
+# solve_policy!(case, _BEST_monotonic)
 # solve_policy!(case, [_BEST_legacy, _BEST_monotonic])
 
-# Plots
-historic_performance_noGC(case)
-historic_performance_1hGC(case)  # TODO WIP
 
-bellman_visual_check_grid(case, "_BEST_monotonic", 1, 2, 3)
-bellman_visual_check_grid(case, "_BEST_monotonic", 1, 3, 2)
-bellman_visual_check_grid(case, "_BEST_monotonic", 2, 1, 3)
-bellman_visual_check_grid(case, "_BEST_monotonic", 3, 1, 2)
-bellman_visual_check_grid(case, "_BEST_monotonic", 2, 3, 1)
-bellman_visual_check_grid(case, "_BEST_monotonic", 3, 2, 1)
+# Plots
+basic_performance(case)
+policy_breakdown(case)
+# historic_performance_1hGC(case)  # TODO THIS DOES NOT WORK!
+
+# error("STOP HERE")
+
+# bellman_visual_check_grid(case, "_BEST_monotonic", 1, 2, 3)
+# bellman_visual_check_grid(case, "_BEST_monotonic", 1, 3, 2)
+# bellman_visual_check_grid(case, "_BEST_monotonic", 2, 1, 3)
+# bellman_visual_check_grid(case, "_BEST_monotonic", 3, 1, 2)
+# bellman_visual_check_grid(case, "_BEST_monotonic", 2, 3, 1)
+# bellman_visual_check_grid(case, "_BEST_monotonic", 3, 2, 1)
 
 # bellman_visual_check_gif(case, "_BEST_legacy", 2, 3, 1)
 
+# u=case.policies[:_BEST_temp].tradeDecisions;
+# y=case.policies[:_BEST_temp].storageDecisions;
+
+# println("all unique: $(length(u))")
+# println("capacity C: $(count(x->x==-2,u))")
+# println("capacity D: $(count(x->x==2,u))")
+# println("capacity E: $(count(x->x==8,y[:,8,:,:]))")
+# println("capacity 0: $(count(x->x==0,y[:,2,:,:]))")
+# println("choose idle: $(count(x->x==0,u))")
+# # error("STOP HERE!")
+# println("choose <C: $(count(x->x==-1,u[:,1:7,:,:]))")
+# println("choose <D: $(count(x->x==1,u[:,3:9,:,:]))")
+
+# println("")
+# println("most common non CDE0")
+# for val = 1:4
+#     println("choose +-$val: $(count(x->x==-val,u[:,1:16,:,:]) + (count(x->x==val,u[:,6:end,:,:])))")
+#     h1=histogram(getindex.(findall(x->x==val,u[:,6:end,:,:]), 2).+4, bins = -0.5:21.5, label="u=$val", xlabel="y", ylabel="freq")
+#     display(h1)
+#     h2=histogram(getindex.(findall(x->x==-val,u[:,1:16,:,:]), 2).-1, bins = -0.5:21.5, label="u=$(-val)", xlabel="y", ylabel="freq")
+#     display(h2)
+# end
+
+# temp = findall(x->x==1,u[:,6:end,:,:])
+# histogram(getindex.(temp, 1), bins = 0:48)
+
+# println("")
+# println("full stacks")
+
+# println("all stacks: $(length(u[:,:,:,1]))")
+# println("all trades in stack are capacity C or D: $(count(vec -> all(x -> abs(x) == 5, vec), eachslice(u, dims=(1, 2, 3))))")
+# println("all trades in stack are capacity C or D or idle: $(count(vec -> all(x -> abs(x) == 5 || x==0, vec), eachslice(u, dims=(1, 2, 3))))")
+
+# CD = 0
+# CDidle = 0
+# CDE0 = 0
+# CDE0idle = 0
+
+# for t in 1:case.T
+#     for e in 0:case.bess.storageCapacityMWh
+#         for i in 1:case.PBANDS
+#             Uslice = u[t,e+1,i,:]
+#             Yslice = y[t,e+1,i,:]
+
+#             if all(x -> abs(x) == 5, Uslice)
+#                 CD+=1
+#             end
+
+#             if all(x -> abs(x) == 5 || x == 0, Uslice)
+#                 CDidle+=1
+#             end
+
+#             if all(((u, y),) -> abs(u) == 5 || y == 0 || y == 20 , zip(Uslice, Yslice))
+#                 CDE0+=1
+#             end
+
+#             if all(((u, y),) -> abs(u) == 5 || u == 0 || y == 0 || y == 20 , zip(Uslice, Yslice))
+#                 CDE0idle+=1
+#             end
+#         end
+#     end
+# end
+
+# @show(CD)
+# @show(CDidle)
+# @show(CDE0)
+# @show(CDE0idle)
+
+# @show(length(u))
+# @show(count(x->x==5,u))
+# @show(count(x->x==-5,u))
+# @show(count(x->x==0,u))
+# @show(count(x->1<=x<=4,u))
+# @show(count(x->-4<=x<=-1,u))
 
 
+# @show(count(x->x==0,y[:,2:5,:,:]))
+# @show(count(x->x==20,y[:,17:20,:,:]))
+
+
+# @show(count(x->1<=x<=4,u[:,6:end,:,:]))
+# @show(count(x->-4<=x<=-1,u[:,1:16,:,:]))
+
+
+
+
+# REALLY OLD FROM HERE ON
 
 
 # # WORKSPACE
