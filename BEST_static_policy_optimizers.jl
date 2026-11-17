@@ -2,7 +2,7 @@
 
 """ monotonic method without lp WIP!!
 """
-function _BEST_temp(case::BESTCase)
+function _BEST_now(case::BESTCase)
     
     # Extract relavent inputs
     T = case.T

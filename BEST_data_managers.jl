@@ -47,6 +47,23 @@ end
 
 function get_clean_test_case_data(TP::Int, PERPERIOD::Int, rawData::DataFrame, include_partial_clean_data::Bool)
     
+    ## TEMPORARY!!
+    if true
+        # filepath
+        file = joinpath(@__DIR__, "DispatchEnergyPrices", "202608_FinalEnergyPrices.csv")
+
+        # read data
+        thisCaseData = CSV.read(file, DataFrame)
+
+        # Keep only OTA2201 connection point data
+        thisCaseData = filter(:PointOfConnection => p -> p == node, thisCaseData)
+
+        vscodedisplay(thisCaseData)
+
+        # update case
+        return thisCaseData
+    end
+
     # Count number of observations per TP and Day
     intervalsByDay = combine(groupby(rawData, :TradingDate), nrow => :Count)
     intervalsByTP = combine(groupby(rawData, [:TradingDate, :TradingPeriod]), nrow => :Count)

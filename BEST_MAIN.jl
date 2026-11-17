@@ -75,7 +75,7 @@ set_price!(case, first_order_markov_price_process)
 set_BESS!(case, storageCapacityMWh, dischargeCapacityMW, chargeCapacityMW)
 
 # Optimize
-@time solve_policy!(case, _BEST_temp)
+@time solve_policy!(case, _BEST_now)
 @time solve_policy!(case, _BEST_gc)
 # solve_policy!(case, _BEST_legacy)
 # solve_policy!(case, _BEST_monotonic)
@@ -98,8 +98,8 @@ policy_breakdown(case)
 
 # bellman_visual_check_gif(case, "_BEST_legacy", 2, 3, 1)
 
-# u=case.policies[:_BEST_temp].tradeDecisions;
-# y=case.policies[:_BEST_temp].storageDecisions;
+# u=case.policies[:_BEST_gc].tradeDecisions;
+# y=case.policies[:_BEST_gc].storageDecisions;
 
 # println("all unique: $(length(u))")
 # println("capacity C: $(count(x->x==-2,u))")
@@ -131,63 +131,71 @@ policy_breakdown(case)
 # println("all trades in stack are capacity C or D: $(count(vec -> all(x -> abs(x) == 5, vec), eachslice(u, dims=(1, 2, 3))))")
 # println("all trades in stack are capacity C or D or idle: $(count(vec -> all(x -> abs(x) == 5 || x==0, vec), eachslice(u, dims=(1, 2, 3))))")
 
+# idle = 0
 # CD = 0
-# CDidle = 0
-# CDE0 = 0
-# CDE0idle = 0
+# # CDidle = 0
+# E0 = 0
+# # CDE0idle = 0
 
 # for t in 1:case.T
+#     println("solving t=$t")
 #     for e in 0:case.bess.storageCapacityMWh
-#         for i in 1:case.PBANDS
-#             Uslice = u[t,e+1,i,:]
-#             Yslice = y[t,e+1,i,:]
+#         for uIdx in 1:1001
+#             for i in 1:case.PBANDS
+#                 Uslice = u[t,e+1,uIdx,i,:]
+#                 Yslice = y[t,e+1,uIdx,i,:]
 
-#             if all(x -> abs(x) == 5, Uslice)
-#                 CD+=1
-#             end
+#                 if all(x ->x == 0, Uslice)
+#                     idle+=1
+#                 end
 
-#             if all(x -> abs(x) == 5 || x == 0, Uslice)
-#                 CDidle+=1
-#             end
+#                 if all(x -> abs(x) == 2, Uslice)
+#                     CD+=1
+#                 end
 
-#             if all(((u, y),) -> abs(u) == 5 || y == 0 || y == 20 , zip(Uslice, Yslice))
-#                 CDE0+=1
-#             end
+#                 # if all(x -> abs(x) == 2 || x == 0, Uslice)
+#                 #     CDidle+=1
+#                 # end
 
-#             if all(((u, y),) -> abs(u) == 5 || u == 0 || y == 0 || y == 20 , zip(Uslice, Yslice))
-#                 CDE0idle+=1
+#                 if all(((u, y),) -> abs(u) == 1 || y == 0 || y == 8 , zip(Uslice, Yslice))
+#                     E0+=1
+#                 end
+
+#                 # if all(((u, y),) -> abs(u) == 2 || u == 0 || y == 0 || y == 8 , zip(Uslice, Yslice))
+#                 #     CDE0idle+=1
+#                 # end
 #             end
 #         end
 #     end
 # end
 
-# @show(CD)
-# @show(CDidle)
-# @show(CDE0)
-# @show(CDE0idle)
+# # @show(CD)
+# # @show(CDidle)
+# # @show(CDE0)
+# # @show(CDE0idle)
 
-# @show(length(u))
-# @show(count(x->x==5,u))
-# @show(count(x->x==-5,u))
-# @show(count(x->x==0,u))
-# @show(count(x->1<=x<=4,u))
-# @show(count(x->-4<=x<=-1,u))
-
-
-# @show(count(x->x==0,y[:,2:5,:,:]))
-# @show(count(x->x==20,y[:,17:20,:,:]))
+# # @show(length(u))
+# # @show(count(x->x==5,u))
+# # @show(count(x->x==-5,u))
+# # @show(count(x->x==0,u))
+# # @show(count(x->1<=x<=4,u))
+# # @show(count(x->-4<=x<=-1,u))
 
 
-# @show(count(x->1<=x<=4,u[:,6:end,:,:]))
-# @show(count(x->-4<=x<=-1,u[:,1:16,:,:]))
+# # @show(count(x->x==0,y[:,2:5,:,:]))
+# # @show(count(x->x==20,y[:,17:20,:,:]))
+
+
+# # @show(count(x->1<=x<=4,u[:,6:end,:,:]))
+# # @show(count(x->-4<=x<=-1,u[:,1:16,:,:]))
 
 
 
 
-# REALLY OLD FROM HERE ON
+# # REALLY OLD FROM HERE ON
 
 
-# # WORKSPACE
+# # # WORKSPACE
 
 
 

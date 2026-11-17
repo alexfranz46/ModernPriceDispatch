@@ -22,11 +22,15 @@ function basic_performance(case::BESTCase; y0=0, plim=500)
         for policy in keys(case.policies)
     )
 
+    # focusDays = [Date("2025-03-24"), Date("2024-01-05")]
+
     # create individual visual for each day
     for (dayIdx, day) in enumerate(groupby(dataTP, :TradingDate))
 
+        # day.TradingDate[1] in focusDays || continue
+
         # Initialize plot
-        p = plot(xlabel="time of day (HH)", ylabel="Battery charge (MWh)", legend=:topleft)
+        p = plot(xlabel="time of day (HH)", ylabel="Battery charge (MWh)", legend=:topright)
 
         # format x-axis
         vals = range(0, 24, length=nrow(day)+1)
@@ -122,37 +126,57 @@ function basic_performance(case::BESTCase; y0=0, plim=500)
         end
 
         display(p)
+        # savefig(p, "plots/ResultsDay$(dayIdx).pdf")
     end
 
     # Show revenue table
     insertcols!(df_revenue, Revenues...)
     show(df_revenue, allrows=true)
     println("")
-    println("GC has higher revenue for $(count(df_revenue._BEST_temp .< df_revenue._BEST_gc)) of the days in the set")
+    println("GC has higher revenue for $(count(df_revenue._BEST_now .< df_revenue._BEST_gc)) of the days in the set")
 end
 
 
 function policy_breakdown(case::BESTCase)
-
+    
     C = case.bess.chargeCapacityInterval
     D = case.bess.dischargeCapacityInterval
     E = case.bess.storageCapacityMWh
 
     for (name, policy) in case.policies
+
+        if ndims(policy.BellmanVals) == 3 
+            hasGC = false
+        elseif ndims(policy.BellmanVals) == 4 
+            hasGC = true
+        else
+            error("Unexpected dimensions")
+        end
+
         u = policy.tradeDecisions
         y = policy.storageDecisions
 
         println("POLICY = $name")
 
-        println("all unique: $(length(u))")
-        println("capacity C: $(count(x->x==-C,u))")
-        println("capacity D: $(count(x->x==D,u))")
-        # println("capacity E: $(count(x->x==E,y[:,E,:,:])) THIS MIGHT BE WRONG")
-        # println("capacity 0: $(count(x->x==0,y[:,2,:,:])) THIS MIGHT BE WRONG")
-        println("choose idle: $(count(x->x==0,u))")
-        # println("choose <C: $(count(x->-C<x<0,u[:,1:E-1,:,:])) THIS MIGHT BE WRONG")
-        # println("choose <D: $(count(x->0<x<D,u[:,3:end,:,:])) THIS MIGHT BE WRONG")
-
+        if hasGC
+            println("all unique: $(length(u))")
+            println("capacity C: $(count(x->x==-C,u))")
+            println("capacity D: $(count(x->x==D,u))")
+            println("capacity E: $(count(x->x==E,y[:,E,:,:,:])) THIS MIGHT BE WRONG")
+            println("capacity 0: $(count(x->x==0,y[:,2,:,:,:])) THIS MIGHT BE WRONG")
+            println("choose idle: $(count(x->x==0,u))")
+            println("choose <C: $(count(x->-C<x<0,u[:,1:E-1,:,:,:])) THIS MIGHT BE WRONG")
+            println("choose <D: $(count(x->0<x<D,u[:,3:end,:,:,:])) THIS MIGHT BE WRONG")
+        else
+            println("all unique: $(length(u))")
+            println("capacity C: $(count(x->x==-C,u))")
+            println("capacity D: $(count(x->x==D,u))")
+            println("capacity E: $(count(x->x==E,y[:,E,:,:])) THIS MIGHT BE WRONG")
+            println("capacity 0: $(count(x->x==0,y[:,2,:,:])) THIS MIGHT BE WRONG")
+            println("choose idle: $(count(x->x==0,u))")
+            println("choose <C: $(count(x->-C<x<0,u[:,1:E-1,:,:])) THIS MIGHT BE WRONG")
+            println("choose <D: $(count(x->0<x<D,u[:,3:end,:,:])) THIS MIGHT BE WRONG")
+        end
 
         #count(x->x==-Inf, V) <- the amount of wasted slots (infeasible and always skipped) #35%ish
     end
